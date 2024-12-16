@@ -120,6 +120,7 @@ header('Content-Type: text/html; charset=utf-8');
             justify-content: center;
             gap: 10px;
             margin-bottom: 20px;
+            margin-top: 20px;
         }
 
         .time-button {
@@ -365,12 +366,6 @@ header('Content-Type: text/html; charset=utf-8');
     <div class="container">
         <h1>Elpriser</h1>
         
-        <div class="time-range-selector">
-            <button class="time-button active" data-days="1">Idag</button>
-            <button class="time-button" data-days="7">Vecka</button>
-            <button class="time-button" data-days="30">Månad</button>
-        </div>
-
         <div id="error-container"></div>
 
         <div class="price-info">
@@ -412,6 +407,12 @@ header('Content-Type: text/html; charset=utf-8');
 
         <canvas id="priceChart"></canvas>
         <div id="chartTooltip" style="display: none;"></div>
+        
+        <div class="time-range-selector">
+            <button class="time-button active" data-days="1">Idag</button>
+            <button class="time-button" data-days="7">Vecka</button>
+            <button class="time-button" data-days="30">Månad</button>
+        </div>
     </div>
 
     <script>
@@ -568,8 +569,9 @@ sudo chmod 755 ${error.cache_dir}</pre>
 
         // Function to update the UI with new price data
         function updateUI(data) {
-            const currentHour = new Date().getHours();
-            const today = new Date().toISOString().split('T')[0];
+            const now = new Date();
+            const currentHour = now.getHours();
+            const today = now.toISOString().split('T')[0];
             
             // Find current price
             let currentPrice = null;
@@ -581,10 +583,12 @@ sudo chmod 755 ${error.cache_dir}</pre>
             
             // Process prices
             data.prices.forEach(price => {
-                const priceHour = new Date(price.time_start).getHours();
-                const priceDay = price.time_start.split('T')[0];
+                const priceDate = new Date(price.time_start);
+                const priceHour = priceDate.getHours();
+                const priceDay = priceDate.toISOString().split('T')[0];
                 const totalPrice = price.total_price;
                 
+                // Set current price for the current hour
                 if (priceDay === today && priceHour === currentHour) {
                     currentPrice = totalPrice;
                 }
@@ -592,7 +596,7 @@ sudo chmod 755 ${error.cache_dir}</pre>
                 if (priceDay >= today && (priceDay > today || priceHour >= currentHour)) {
                     if (totalPrice < lowestPrice) {
                         lowestPrice = totalPrice;
-                        lowestPriceHour = new Date(price.time_start);
+                        lowestPriceHour = priceDate;
                     }
                     if (totalPrice > highestPrice) {
                         highestPrice = totalPrice;
@@ -703,8 +707,9 @@ sudo chmod 755 ${error.cache_dir}</pre>
         // Function to update the chart
         function updateChart(prices) {
             const labels = prices.map(price => {
-                const date = new Date(price.time_start);
-                return date.toLocaleString('sv-SE', { weekday: 'short', hour: '2-digit', minute: '2-digit' });
+                const startDate = new Date(price.time_start);
+                const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // Add 1 hour
+                return `${startDate.toLocaleString('sv-SE', { weekday: 'short' })} ${startDate.getHours().toString().padStart(2, '0')}:00 - ${endDate.getHours().toString().padStart(2, '0')}:00`;
             });
             
             const values = prices.map(price => price.total_price);
@@ -789,16 +794,15 @@ sudo chmod 755 ${error.cache_dir}</pre>
                             const isDecrease = price <= currentPrice;
                             
                             const hourTime = new Date(priceData.time_start);
+                            const endTime = new Date(hourTime.getTime() + 60 * 60 * 1000); // Add 1 hour
                             const now = new Date();
                             const diffMs = hourTime - now;
                             
                             let tooltipContent = `
                                 <div class="tooltip-time">
-                                    ${hourTime.toLocaleString('sv-SE', { 
-                                        weekday: 'short', 
-                                        hour: '2-digit', 
-                                        minute: '2-digit' 
-                                    })}
+                                    ${hourTime.toLocaleString('sv-SE', { weekday: 'short' })} ${
+                                        hourTime.getHours().toString().padStart(2, '0')}:00 - ${
+                                        endTime.getHours().toString().padStart(2, '0')}:00
                                 </div>
                                 <div class="tooltip-price">
                                     Pris: ${price.toFixed(1)} öre/kWh
