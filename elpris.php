@@ -326,6 +326,8 @@ header('Content-Type: text/html; charset=utf-8');
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
             margin-top: 10px;
             line-height: 1.5;
+            text-align: left;
+            color: #888;
         }
 
         .tooltip-time {
@@ -406,7 +408,7 @@ header('Content-Type: text/html; charset=utf-8');
         </div>
 
         <canvas id="priceChart"></canvas>
-        <div id="chartTooltip" style="display: none;"></div>
+        <div id="chartTooltip">Välj en timme för att visa detaljer</div>
         
         <div class="time-range-selector">
             <button class="time-button active" data-days="1">Idag</button>
@@ -708,8 +710,7 @@ sudo chmod 755 ${error.cache_dir}</pre>
         function updateChart(prices) {
             const labels = prices.map(price => {
                 const startDate = new Date(price.time_start);
-                const endDate = new Date(startDate.getTime() + 60 * 60 * 1000); // Add 1 hour
-                return `${startDate.toLocaleString('sv-SE', { weekday: 'short' })} ${startDate.getHours().toString().padStart(2, '0')}:00 - ${endDate.getHours().toString().padStart(2, '0')}:00`;
+                return `${startDate.toLocaleString('sv-SE', { weekday: 'short' })} ${startDate.getHours().toString().padStart(2, '0')}:00`;
             });
             
             const values = prices.map(price => price.total_price);
@@ -789,8 +790,9 @@ sudo chmod 755 ${error.cache_dir}</pre>
                             const index = elements[0].index;
                             const priceData = chart.data.fullData[index];
                             const price = elements[0].element.$context.parsed.y;
-                            const currentPrice = parseFloat(document.getElementById('current-price').textContent);
-                            const priceDiff = ((price - currentPrice) / currentPrice * 100).toFixed(1);
+                            const currentPriceEl = document.getElementById('current-price');
+                            const currentPrice = currentPriceEl.textContent === '--' ? price : parseFloat(currentPriceEl.textContent);
+                            const priceDiff = currentPrice ? ((price - currentPrice) / currentPrice * 100).toFixed(1) : '0.0';
                             const isDecrease = price <= currentPrice;
                             
                             const hourTime = new Date(priceData.time_start);
@@ -819,13 +821,12 @@ sudo chmod 755 ${error.cache_dir}</pre>
                             }
 
                             tooltipEl.innerHTML = tooltipContent;
-                            tooltipEl.style.display = 'block';
                             
                             // Set the highlighted hour
                             chart.options.plugins.customCanvasBackgroundColor.highlightedHour = priceData.time_start;
                             chart.update('none');
                         } else {
-                            tooltipEl.style.display = 'none';
+                            tooltipEl.innerHTML = 'Välj en timme för att visa detaljer';
                             // Clear the highlighted hour
                             chart.options.plugins.customCanvasBackgroundColor.highlightedHour = null;
                             chart.update('none');
