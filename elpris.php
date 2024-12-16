@@ -22,14 +22,44 @@ function calculateTotalPrice($base_price_sek) {
 
 // Function to safely fetch JSON data
 function fetchPriceData($date, $area) {
+    static $cache_error_shown = false;
+    
     // Convert date format from Y/m-d to Y-m-d for proper parsing
     $date = str_replace('/', '-', $date);
     
     // Create directory structure if it doesn't exist
     $year = date('Y', strtotime($date));
     $cache_dir = "oldPrices/$year";
+    
+    // Check if directory exists and is writable
+    $cache_error = '';
     if (!file_exists($cache_dir)) {
-        mkdir($cache_dir, 0777, true);
+        if (!@mkdir($cache_dir, 0777, true)) {
+            $cache_error = "Cache directory could not be created";
+        }
+    } elseif (!is_writable($cache_dir)) {
+        $cache_error = "Cache directory is not writable";
+    }
+    
+    // Display error message if there are permission issues (only once)
+    if ($cache_error && !$cache_error_shown) {
+        echo '<div style="background-color: #ff5252; color: white; padding: 20px; margin: 20px; border-radius: 8px; font-family: sans-serif;">
+            <h3 style="margin-top: 0;">⚠️ Cache Directory Permission Issue</h3>
+            <p><strong>Error:</strong> ' . htmlspecialchars($cache_error) . ' (' . htmlspecialchars($cache_dir) . ')</p>
+            <p><strong>To fix this, run these commands on your Linux server:</strong></p>
+            <pre style="background: rgba(0,0,0,0.1); padding: 15px; border-radius: 4px; overflow-x: auto;">
+# Create the cache directory
+mkdir -p ' . htmlspecialchars($cache_dir) . '
+
+# Set ownership to web server user (usually www-data)
+sudo chown www-data:www-data ' . htmlspecialchars($cache_dir) . '
+
+# Set proper directory permissions
+sudo chmod 755 ' . htmlspecialchars($cache_dir) . '</pre>
+            <p><strong>Note:</strong> If your web server runs as a different user, replace www-data with that username.</p>
+            <p>You can find your web server user by running: <code>ps aux | grep apache</code> or <code>ps aux | grep nginx</code></p>
+        </div>';
+        $cache_error_shown = true;
     }
 
     // Format the filename: month-day_area.json
