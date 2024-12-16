@@ -2,11 +2,10 @@
 header('Content-Type: application/json');
 header('Cache-Control: no-cache');
 
-// Constants for price components (all in öre/kWh)
-const ADDITIONAL_FEE = 8.63;
-const ENERGY_TAX = 54.875;
-const TRANSFER_CHARGE = 25.0;
-const VAT_MULTIPLIER = 1.25;
+require_once 'config.php';
+
+// Valid price areas in Sweden
+const VALID_AREAS = ['SE1', 'SE2', 'SE3', 'SE4'];
 
 // Function to calculate total price from base price
 function calculateTotalPrice($base_price_sek) {
@@ -93,16 +92,16 @@ function fetchPriceData($date, $area) {
 
 // Get parameters
 $days = isset($_GET['days']) ? (int)$_GET['days'] : 1;
-$area = isset($_GET['area']) ? $_GET['area'] : 'SE3';
+$area = isset($_GET['area']) ? $_GET['area'] : DEFAULT_AREA;
 
 // Validate input
-if ($days < 1 || $days > 31) {
+if ($days < 1 || $days > MAX_DAYS) {
     http_response_code(400);
-    echo json_encode(['error' => true, 'message' => 'Days parameter must be between 1 and 31']);
+    echo json_encode(['error' => true, 'message' => "Days parameter must be between 1 and " . MAX_DAYS]);
     exit;
 }
 
-if (!in_array($area, ['SE1', 'SE2', 'SE3', 'SE4'])) {
+if (!in_array($area, VALID_AREAS)) {
     http_response_code(400);
     echo json_encode(['error' => true, 'message' => 'Invalid area parameter']);
     exit;

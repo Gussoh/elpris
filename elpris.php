@@ -1,5 +1,6 @@
 <?php
 header('Content-Type: text/html; charset=utf-8');
+require_once 'config.php';
 ?>
 <!DOCTYPE html>
 <html>
@@ -418,21 +419,10 @@ header('Content-Type: text/html; charset=utf-8');
     </div>
 
     <script>
-        // Constants for appliance consumption
-        const APPLIANCE_COSTS = {
-            'Diskmaskin': {
-                consumption: 1.2,
-                unit: 'cykel'
-            },
-            'Tvättmaskin': {
-                consumption: 2.0,
-                unit: 'cykel'
-            },
-            'Dusch': {
-                consumption: 5,
-                unit: '10 min'
-            }
-        };
+        // Constants from PHP config
+        const APPLIANCE_COSTS = <?= json_encode(APPLIANCE_COSTS) ?>;
+        const UPDATE_INTERVAL = <?= UPDATE_INTERVAL_MINUTES ?> * 60 * 1000; // Convert to milliseconds
+        const DEFAULT_AREA = '<?= DEFAULT_AREA ?>';
 
         let chart = null;
         let priceConstants = null;
@@ -840,7 +830,7 @@ sudo chmod 755 ${error.cache_dir}</pre>
         // Function to fetch data and update UI
         async function fetchDataAndUpdate(days = 1) {
             try {
-                const response = await fetch(`api.php?days=${days}&area=SE3`);
+                const response = await fetch(`api.php?days=${days}&area=${DEFAULT_AREA}`);
                 const data = await response.json();
                 
                 if (data.error) {
@@ -859,23 +849,27 @@ sudo chmod 755 ${error.cache_dir}</pre>
             }
         }
 
-        // Initialize
-        fetchDataAndUpdate(1);
-
         // Add event listeners to time range buttons
         document.querySelectorAll('.time-button').forEach(button => {
-            button.addEventListener('click', () => {
+            button.addEventListener('click', async () => {
+                // Update button states
                 document.querySelectorAll('.time-button').forEach(btn => 
                     btn.classList.remove('active'));
                 button.classList.add('active');
-                fetchDataAndUpdate(parseInt(button.dataset.days));
+                
+                // Fetch new data
+                await fetchDataAndUpdate(parseInt(button.dataset.days));
             });
         });
 
-        // Update data every 5 minutes
-        setInterval(() => fetchDataAndUpdate(
-            parseInt(document.querySelector('.time-button.active').dataset.days)
-        ), 5 * 60 * 1000);
+        // Initialize
+        fetchDataAndUpdate(1);
+
+        // Update data periodically
+        setInterval(() => {
+            const activeDays = parseInt(document.querySelector('.time-button.active').dataset.days);
+            fetchDataAndUpdate(activeDays);
+        }, UPDATE_INTERVAL);
     </script>
 </body>
 </html>
