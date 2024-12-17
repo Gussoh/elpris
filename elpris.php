@@ -631,7 +631,7 @@ sudo chmod 755 ${error.cache_dir}</pre>
             
             // Update time until lowest price
             if (lowestPriceHour) {
-                const minutesUntilLowest = Math.floor((lowestPriceHour - new Date()) / 1000 / 60);
+                const minutesUntilLowest = Math.max(0, Math.floor((lowestPriceHour - new Date()) / 1000 / 60));
                 const hoursUntilLowest = Math.floor(minutesUntilLowest / 60);
                 const minutesRemaining = minutesUntilLowest % 60;
                 document.getElementById('time-until-lowest').textContent = 
