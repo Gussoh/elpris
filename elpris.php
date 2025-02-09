@@ -663,14 +663,19 @@ sudo chmod 755 ${error.cache_dir}</pre>
             
             // Update price breakdown
             if (currentPrice && priceConstants) {
-                const spotPrice = currentPrice - (
+                // First get the price before VAT
+                const priceBeforeVat = currentPrice / priceConstants.vat_multiplier;
+                
+                // Then subtract all fixed components to get spot price
+                const spotPrice = priceBeforeVat - (
                     priceConstants.additional_fee + 
                     priceConstants.energy_tax + 
                     priceConstants.transfer_charge
                 );
+
                 document.getElementById('price-breakdown').innerHTML = `
                     <div class="breakdown-item">
-                        <span>Spotpris (inkl. moms):</span>
+                        <span>Spotpris:</span>
                         <span>${spotPrice.toFixed(1)} öre/kWh</span>
                     </div>
                     <div class="breakdown-item">
@@ -684,6 +689,14 @@ sudo chmod 755 ${error.cache_dir}</pre>
                     <div class="breakdown-item">
                         <span>Överföringsavgift:</span>
                         <span>${priceConstants.transfer_charge} öre/kWh</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span>Delsumma:</span>
+                        <span>${priceBeforeVat.toFixed(1)} öre/kWh</span>
+                    </div>
+                    <div class="breakdown-item">
+                        <span>Moms (25%):</span>
+                        <span>${(currentPrice - priceBeforeVat).toFixed(1)} öre/kWh</span>
                     </div>
                     <div class="breakdown-item total">
                         <span>Totalt:</span>

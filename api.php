@@ -9,11 +9,11 @@ const VALID_AREAS = ['SE1', 'SE2', 'SE3', 'SE4'];
 
 // Function to calculate total price from base price
 function calculateTotalPrice($base_price_sek) {
-    // Convert base price to öre and add VAT
-    $price_with_vat = $base_price_sek * 100 * VAT_MULTIPLIER;
+    // Add all components before VAT
+    $price_before_vat = ($base_price_sek * 100) + ADDITIONAL_FEE + TRANSFER_CHARGE + ENERGY_TAX;
     
-    // Add fixed components
-    return $price_with_vat + ADDITIONAL_FEE + ENERGY_TAX + TRANSFER_CHARGE;
+    // Apply VAT to the total
+    return $price_before_vat * VAT_MULTIPLIER;
 }
 
 // Function to safely fetch JSON data
