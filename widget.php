@@ -14,24 +14,38 @@ error_reporting(0);
 ini_set('display_errors', 0);
 
 // Widget configuration
-$width = 550;
-$height = 200;
-$padding = 25;
-$graphPadding = 10;
-$textPadding = 15;
-$topBoxHeight = 50;
-$bottomBoxHeight = 80;
+// Get width and height from query parameters or use defaults
+// Usage examples:
+// widget.php               - Default size (550x200)
+// widget.php?width=600     - Custom width (600x200) 
+// widget.php?height=300    - Custom height (550x300)
+// widget.php?width=600&height=300 - Custom dimensions (600x300)
+$width = isset($_GET['width']) ? intval($_GET['width']) : 550;
+$height = isset($_GET['height']) ? intval($_GET['height']) : 200;
 
-// Calculate graph dimensions - moved here to avoid recalculating
+// Set minimum dimensions to avoid rendering issues
+$width = max(400, min(1200, $width));  // Min: 400px, Max: 1200px
+$height = max(200, min(800, $height)); // Min: 200px, Max: 800px
+
+// Calculate scaling factor based on width (reference width is 550px)
+$scaleFactor = $width / 550;
+
+$padding = round(25 * $scaleFactor);
+$graphPadding = round(10 * $scaleFactor);
+$textPadding = round(15 * $scaleFactor);
+$topBoxHeight = 50; // Keep fixed height for top section
+$bottomBoxHeight = 80; // Keep fixed height for bottom section
+
+// Calculate graph dimensions - graph height expands with total height
 $graphWidth = $width - (2 * $graphPadding);
 $graphHeight = $height - $topBoxHeight - $bottomBoxHeight - 10;
 $graphTop = $topBoxHeight + 5;
 $graphBottom = $height - $bottomBoxHeight - 5;
 
 // Text position calculations - moved here so they're defined once
-$labelX = $padding + 10;
-$valueX = $labelX + 220;
-$diffX = $valueX + 100;
+$labelX = $padding + round(10 * $scaleFactor);
+$valueX = $labelX + round(220 * $scaleFactor);
+$diffX = $valueX + round(100 * $scaleFactor);
 $y1 = $height - $bottomBoxHeight + 30;
 $y2 = $height - $bottomBoxHeight + 60;
 
@@ -145,10 +159,10 @@ try {
     
     // Draw text elements based on font availability
     drawTextElements($image, $textElements, $fonts, $width, $height, $textPadding, 
-                     $bottomBoxHeight, $padding, $labelX, $valueX, $diffX, $y1, $y2, $colors);
+                     $bottomBoxHeight, $padding, $labelX, $valueX, $diffX, $y1, $y2, $colors, $scaleFactor);
     
     // Draw decorative corner elements
-    drawCornerElements($image, $padding, $width, $height, $colors['circuitColor']);
+    drawCornerElements($image, $padding, $width, $height, $colors['circuitColor'], $scaleFactor);
     
     // Clear any output buffered content before sending image
     ob_end_clean();
@@ -692,27 +706,37 @@ function formatTextElements($currentHour, $currentPrice, $hoursUntilLowest, $min
  * Draw text elements based on font availability
  */
 function drawTextElements($image, $text, $fonts, $width, $height, $textPadding, 
-                       $bottomBoxHeight, $padding, $labelX, $valueX, $diffX, $y1, $y2, $colors) {
+                     $bottomBoxHeight, $padding, $labelX, $valueX, $diffX, $y1, $y2, $colors, $scaleFactor = 1) {
+    // Scale font sizes based on width
+    $titleFontSize = round(18 * $scaleFactor);
+    $mainFontSize = round(32 * $scaleFactor);
+    $unitFontSize = round(16 * $scaleFactor);
+    $labelFontSize = round(18 * $scaleFactor);
+    
+    // Scale glow and shadow effects
+    $glowOffset = max(1, round(1.5 * $scaleFactor));
+    $shadowOffset = max(1, round(1 * $scaleFactor));
+    
     // Use TrueType fonts if available
     if (is_string($fonts['bold']) && is_string($fonts['regular']) && function_exists('imagettftext')) {
         // ===== TITLE =====
         // Title with glow effect
         for ($i = 0; $i < 360; $i += 45) {
-            $xOffset = round(1.5 * sin(deg2rad($i)));
-            $yOffset = round(1.5 * cos(deg2rad($i)));
-            imagettftext($image, 18, 0, $textPadding + $xOffset, 30 + $yOffset, $colors['glowColor'], $fonts['bold'], 'ELPRIS');
+            $xOffset = round($glowOffset * sin(deg2rad($i)));
+            $yOffset = round($glowOffset * cos(deg2rad($i)));
+            imagettftext($image, $titleFontSize, 0, $textPadding + $xOffset, 30 + $yOffset, $colors['glowColor'], $fonts['bold'], 'ELPRIS');
         }
-        imagettftext($image, 18, 0, $textPadding, 30, $colors['accentColor'], $fonts['bold'], 'ELPRIS');
+        imagettftext($image, $titleFontSize, 0, $textPadding, 30, $colors['accentColor'], $fonts['bold'], 'ELPRIS');
         
         // ===== MAIN TIME AND PRICE DISPLAY =====
         // Calculate sizes for precise positioning
-        $timeBox = imagettfbbox(32, 0, $fonts['bold'], $text['currentTime']);
+        $timeBox = imagettfbbox($mainFontSize, 0, $fonts['bold'], $text['currentTime']);
         $timeWidth = $timeBox[2] - $timeBox[0];
         
-        $priceBox = imagettfbbox(32, 0, $fonts['bold'], $text['priceValue']);
+        $priceBox = imagettfbbox($mainFontSize, 0, $fonts['bold'], $text['priceValue']);
         $priceWidth = $priceBox[2] - $priceBox[0];
         
-        $unitBox = imagettfbbox(16, 0, $fonts['regular'], $text['priceUnit']);
+        $unitBox = imagettfbbox($unitFontSize, 0, $fonts['regular'], $text['priceUnit']);
         $unitWidth = $unitBox[2] - $unitBox[0];
         
         // Position calculations - more spacing between elements
@@ -731,110 +755,119 @@ function drawTextElements($image, $text, $fonts, $width, $height, $textPadding,
         $unitX = $priceX + $priceWidth + 15; // Increased spacing from 5 to 15
         
         // Draw time with glow effect (accent color)
-        imagettftext($image, 32, 0, $timeX + 1, 45 + 1, $colors['shadowColor'], $fonts['bold'], $text['currentTime']);
-        imagettftext($image, 32, 0, $timeX, 45, $colors['accentColor'], $fonts['bold'], $text['currentTime']);
+        imagettftext($image, $mainFontSize, 0, $timeX + 1, 45 + 1, $colors['shadowColor'], $fonts['bold'], $text['currentTime']);
+        imagettftext($image, $mainFontSize, 0, $timeX, 45, $colors['accentColor'], $fonts['bold'], $text['currentTime']);
         
         // Draw price with glow effect (white color)
-        imagettftext($image, 32, 0, $priceX + 1, 45 + 1, $colors['shadowColor'], $fonts['bold'], $text['priceValue']);
-        imagettftext($image, 32, 0, $priceX, 45, $colors['textColor'], $fonts['bold'], $text['priceValue']);
+        imagettftext($image, $mainFontSize, 0, $priceX + 1, 45 + 1, $colors['shadowColor'], $fonts['bold'], $text['priceValue']);
+        imagettftext($image, $mainFontSize, 0, $priceX, 45, $colors['textColor'], $fonts['bold'], $text['priceValue']);
         
         // Draw unit
-        imagettftext($image, 16, 0, $unitX + 1, 45 + 1, $colors['shadowColor'], $fonts['regular'], $text['priceUnit']);
-        imagettftext($image, 16, 0, $unitX, 45, imagecolorallocatealpha($image, 200, 200, 200, 0), $fonts['regular'], $text['priceUnit']);
+        imagettftext($image, $unitFontSize, 0, $unitX + 1, 45 + 1, $colors['shadowColor'], $fonts['regular'], $text['priceUnit']);
+        imagettftext($image, $unitFontSize, 0, $unitX, 45, imagecolorallocatealpha($image, 200, 200, 200, 0), $fonts['regular'], $text['priceUnit']);
         
         // ===== BOTTOM SECTION =====
         // Draw a subtle horizontal divider
         imageline($image, $padding, $height - $bottomBoxHeight, $width - $padding, $height - $bottomBoxHeight, $colors['dividerColor']);
         
         // Calculate widths for precise positioning
-        $lowestLabelBox = imagettfbbox(18, 0, $fonts['regular'], $text['lowestPriceText1']);
+        $lowestLabelBox = imagettfbbox($labelFontSize, 0, $fonts['regular'], $text['lowestPriceText1']);
         $lowestLabelWidth = $lowestLabelBox[2] - $lowestLabelBox[0];
         
-        $cheapest3hLabelBox = imagettfbbox(18, 0, $fonts['regular'], $text['cheapest3hText1']);
+        $cheapest3hLabelBox = imagettfbbox($labelFontSize, 0, $fonts['regular'], $text['cheapest3hText1']);
         $cheapest3hLabelWidth = $cheapest3hLabelBox[2] - $cheapest3hLabelBox[0];
         
         // Make sure both labels align at the same point
         $labelMaxWidth = max($lowestLabelWidth, $cheapest3hLabelWidth);
         
         // Value column starts closer to the label since we have shorter labels now
-        $valueColX = $labelX + $labelMaxWidth + 15; // Reduced from 20 to 15
+        $valueColX = $labelX + $labelMaxWidth + round(15 * $scaleFactor); // Scale the spacing
         
         // Fixed position for percentage column - right aligned
-        $diffColX = $width - $padding - 50; // 50px from right edge for percentages
+        $diffColX = $width - $padding - round(50 * $scaleFactor); // Scale the spacing
         
         // Draw lowest price row
-        imagettftext($image, 18, 0, $labelX + 1, $y1 + 1, $colors['shadowColor'], $fonts['regular'], $text['lowestPriceText1']);
-        imagettftext($image, 18, 0, $labelX, $y1, $colors['textColor'], $fonts['regular'], $text['lowestPriceText1']);
+        imagettftext($image, $labelFontSize, 0, $labelX + $shadowOffset, $y1 + $shadowOffset, $colors['shadowColor'], $fonts['regular'], $text['lowestPriceText1']);
+        imagettftext($image, $labelFontSize, 0, $labelX, $y1, $colors['textColor'], $fonts['regular'], $text['lowestPriceText1']);
         
-        imagettftext($image, 18, 0, $valueColX + 1, $y1 + 1, $colors['shadowColor'], $fonts['bold'], $text['lowestPriceText2']);
-        imagettftext($image, 18, 0, $valueColX, $y1, $colors['textColor'], $fonts['bold'], $text['lowestPriceText2']);
+        imagettftext($image, $labelFontSize, 0, $valueColX + $shadowOffset, $y1 + $shadowOffset, $colors['shadowColor'], $fonts['bold'], $text['lowestPriceText2']);
+        imagettftext($image, $labelFontSize, 0, $valueColX, $y1, $colors['textColor'], $fonts['bold'], $text['lowestPriceText2']);
         
         // Right align percentage
-        $diffLowestBox = imagettfbbox(18, 0, $fonts['bold'], $text['diffTextLowest']);
+        $diffLowestBox = imagettfbbox($labelFontSize, 0, $fonts['bold'], $text['diffTextLowest']);
         $diffLowestWidth = $diffLowestBox[2] - $diffLowestBox[0];
         $diffLowestX = $diffColX - $diffLowestWidth;
         
-        imagettftext($image, 18, 0, $diffLowestX + 1, $y1 + 1, $colors['shadowColor'], $fonts['bold'], $text['diffTextLowest']);
-        imagettftext($image, 18, 0, $diffLowestX, $y1, $text['diffColorLowest'], $fonts['bold'], $text['diffTextLowest']);
+        imagettftext($image, $labelFontSize, 0, $diffLowestX + $shadowOffset, $y1 + $shadowOffset, $colors['shadowColor'], $fonts['bold'], $text['diffTextLowest']);
+        imagettftext($image, $labelFontSize, 0, $diffLowestX, $y1, $text['diffColorLowest'], $fonts['bold'], $text['diffTextLowest']);
         
         // Draw cheapest 3h row
-        imagettftext($image, 18, 0, $labelX + 1, $y2 + 1, $colors['shadowColor'], $fonts['regular'], $text['cheapest3hText1']);
-        imagettftext($image, 18, 0, $labelX, $y2, $colors['textColor'], $fonts['regular'], $text['cheapest3hText1']);
+        imagettftext($image, $labelFontSize, 0, $labelX + $shadowOffset, $y2 + $shadowOffset, $colors['shadowColor'], $fonts['regular'], $text['cheapest3hText1']);
+        imagettftext($image, $labelFontSize, 0, $labelX, $y2, $colors['textColor'], $fonts['regular'], $text['cheapest3hText1']);
         
-        imagettftext($image, 18, 0, $valueColX + 1, $y2 + 1, $colors['shadowColor'], $fonts['bold'], $text['cheapest3hText2']);
-        imagettftext($image, 18, 0, $valueColX, $y2, $colors['textColor'], $fonts['bold'], $text['cheapest3hText2']);
+        imagettftext($image, $labelFontSize, 0, $valueColX + $shadowOffset, $y2 + $shadowOffset, $colors['shadowColor'], $fonts['bold'], $text['cheapest3hText2']);
+        imagettftext($image, $labelFontSize, 0, $valueColX, $y2, $colors['textColor'], $fonts['bold'], $text['cheapest3hText2']);
         
         // Right align percentage
-        $diff3hBox = imagettfbbox(18, 0, $fonts['bold'], $text['diffText3h']);
+        $diff3hBox = imagettfbbox($labelFontSize, 0, $fonts['bold'], $text['diffText3h']);
         $diff3hWidth = $diff3hBox[2] - $diff3hBox[0];
         $diff3hX = $diffColX - $diff3hWidth;
         
-        imagettftext($image, 18, 0, $diff3hX + 1, $y2 + 1, $colors['shadowColor'], $fonts['bold'], $text['diffText3h']);
-        imagettftext($image, 18, 0, $diff3hX, $y2, $text['diffColor3h'], $fonts['bold'], $text['diffText3h']);
+        imagettftext($image, $labelFontSize, 0, $diff3hX + $shadowOffset, $y2 + $shadowOffset, $colors['shadowColor'], $fonts['bold'], $text['diffText3h']);
+        imagettftext($image, $labelFontSize, 0, $diff3hX, $y2, $text['diffColor3h'], $fonts['bold'], $text['diffText3h']);
         
     } else {
         // Fallback implementation for non-TTF fonts
-        // (keeping this simple as we're primarily focused on TTF fonts)
-        imagestring($image, 5, $textPadding, 15, 'ELPRIS', $colors['accentColor']);
+        // Scale font sizes based on width
+        $titleFont = min(5, max(2, round(5 * $scaleFactor))); 
+        $mainFont = min(5, max(2, round(5 * $scaleFactor)));
+        $unitFont = min(4, max(1, round(3 * $scaleFactor)));
+        $labelFont = min(5, max(2, round(4 * $scaleFactor)));
+        
+        imagestring($image, $titleFont, $textPadding, 15, 'ELPRIS', $colors['accentColor']);
         
         // Calculate positioned based on requested layout
         // Make sure time is right of ELPRIS
-        $elprisWidth = imagefontwidth(5) * strlen('ELPRIS');
-        $elprisRight = $textPadding + $elprisWidth + 20;
+        $elprisWidth = imagefontwidth($titleFont) * strlen('ELPRIS');
+        $elprisRight = $textPadding + $elprisWidth + round(20 * $scaleFactor);
         
-        $timeX = $elprisRight + 20; // Reduced from 30px to 20px from ELPRIS right edge
-        $priceX = $width / 2 + 30; // Increased from 10 to 30 to add more space between time and price
-        $unitX = $priceX + (strlen($text['priceValue']) * imagefontwidth(5)) + 15;
+        $timeX = $elprisRight + round(20 * $scaleFactor); // Reduced spacing
+        $priceX = $width / 2 + round(30 * $scaleFactor); // Increased spacing between time and price
+        $unitX = $priceX + (strlen($text['priceValue']) * imagefontwidth($mainFont)) + round(15 * $scaleFactor);
         
-        imagestring($image, 5, $timeX, 20, $text['currentTime'], $colors['accentColor']);
-        imagestring($image, 5, $priceX, 20, $text['priceValue'], $colors['textColor']);
-        imagestring($image, 3, $unitX, 25, $text['priceUnit'], imagecolorallocate($image, 200, 200, 200));
+        imagestring($image, $mainFont, $timeX, 20, $text['currentTime'], $colors['accentColor']);
+        imagestring($image, $mainFont, $priceX, 20, $text['priceValue'], $colors['textColor']);
+        imagestring($image, $unitFont, $unitX, 25, $text['priceUnit'], imagecolorallocate($image, 200, 200, 200));
         
         // Draw a subtle divider
         imageline($image, $padding, $height - $bottomBoxHeight, $width - $padding, $height - $bottomBoxHeight, $colors['dividerColor']);
         
         // Draw bottom section text
-        imagestring($image, 4, $labelX, $y1, $text['lowestPriceText1'], $colors['textColor']);
-        imagestring($image, 4, $labelX, $y2, $text['cheapest3hText1'], $colors['textColor']);
+        imagestring($image, $labelFont, $labelX, $y1, $text['lowestPriceText1'], $colors['textColor']);
+        imagestring($image, $labelFont, $labelX, $y2, $text['cheapest3hText1'], $colors['textColor']);
         
-        $valueColX = $labelX + 120; // Reduced from 180 since labels are shorter
-        imagestring($image, 4, $valueColX, $y1, $text['lowestPriceText2'], $colors['textColor']);
-        imagestring($image, 4, $valueColX, $y2, $text['cheapest3hText2'], $colors['textColor']);
+        $valueColX = $labelX + round(120 * $scaleFactor); // Scale spacing
+        imagestring($image, $labelFont, $valueColX, $y1, $text['lowestPriceText2'], $colors['textColor']);
+        imagestring($image, $labelFont, $valueColX, $y2, $text['cheapest3hText2'], $colors['textColor']);
         
         // Calculate positions for right-aligned percentages
-        $diffColX = $width - $padding - 50;
-        $diffLowestWidth = imagefontwidth(4) * strlen($text['diffTextLowest']);
-        $diff3hWidth = imagefontwidth(4) * strlen($text['diffText3h']);
+        $diffColX = $width - $padding - round(50 * $scaleFactor);
+        $diffLowestWidth = imagefontwidth($labelFont) * strlen($text['diffTextLowest']);
+        $diff3hWidth = imagefontwidth($labelFont) * strlen($text['diffText3h']);
         
-        imagestring($image, 4, $diffColX - $diffLowestWidth, $y1, $text['diffTextLowest'], $text['diffColorLowest']);
-        imagestring($image, 4, $diffColX - $diff3hWidth, $y2, $text['diffText3h'], $text['diffColor3h']);
+        imagestring($image, $labelFont, $diffColX - $diffLowestWidth, $y1, $text['diffTextLowest'], $text['diffColorLowest']);
+        imagestring($image, $labelFont, $diffColX - $diff3hWidth, $y2, $text['diffText3h'], $text['diffColor3h']);
     }
 }
 
 /**
  * Draw decorative elements in the four corners
  */
-function drawCornerElements($image, $padding, $width, $height, $circuitColor) {
+function drawCornerElements($image, $padding, $width, $height, $circuitColor, $scaleFactor = 1) {
+    // Scale corner elements
+    $cornerSize = round(40 * $scaleFactor);
+    $dotSize = max(3, round(6 * $scaleFactor));
+    
     // Corner positions
     $corners = [
         ['x' => $padding, 'y' => $padding], // Top left
@@ -850,9 +883,9 @@ function drawCornerElements($image, $padding, $width, $height, $circuitColor) {
         $yDirection = ($y == $padding) ? 1 : -1; // Top-to-bottom or bottom-to-top
         
         // Draw horizontal and vertical lines
-        imageline($image, $x, $y, $x + ($xDirection * 40), $y, $circuitColor);
-        imageline($image, $x, $y, $x, $y + ($yDirection * 40), $circuitColor);
-        imagefilledellipse($image, $x, $y, 6, 6, $circuitColor);
+        imageline($image, $x, $y, $x + ($xDirection * $cornerSize), $y, $circuitColor);
+        imageline($image, $x, $y, $x, $y + ($yDirection * $cornerSize), $circuitColor);
+        imagefilledellipse($image, $x, $y, $dotSize, $dotSize, $circuitColor);
     }
 }
 
