@@ -1,9 +1,12 @@
 <?php
 // Price components (all in öre/kWh)
-const ADDITIONAL_FEE = 8.63;
-const ENERGY_TAX = 54.875;
-const TRANSFER_CHARGE = 25.0;
+const ADDITIONAL_FEE = 13.6; // elcertifikat, urspringsgarantier, omkostnader elköp, avgift för balansansvar.
+const ENERGY_TAX = 54.88;
+const TRANSFER_CHARGE = 7.5;
 const VAT_MULTIPLIER = 1.25;
+
+// Convert öre to SEK and add all components
+const PRICE_CONSTANT = (ADDITIONAL_FEE + ENERGY_TAX + TRANSFER_CHARGE) / 100;  // Convert öre to SEK
 
 // Area configuration
 const DEFAULT_AREA = 'SE3';
