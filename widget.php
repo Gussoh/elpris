@@ -60,10 +60,18 @@ try {
         $priceData = $todayData;
     }
     
-    // Try to get tomorrow's price data
-    $tomorrowData = fetchPriceData(date('Y/m-d', strtotime('+1 day')), $area);
-    if (is_array($tomorrowData) && !isset($tomorrowData['error'])) {
-        $priceData = array_merge($priceData, $tomorrowData);
+    // Only try to get tomorrow's price data if it's after 13:45
+    $current_hour = (int)date('G');
+    $current_minute = (int)date('i');
+    $current_time_in_minutes = $current_hour * 60 + $current_minute;
+    $release_time_in_minutes = 13 * 60 + 45; // 13:45 in minutes
+    
+    if ($current_time_in_minutes >= $release_time_in_minutes) {
+        // Try to get tomorrow's price data
+        $tomorrowData = fetchPriceData(date('Y/m-d', strtotime('+1 day')), $area);
+        if (is_array($tomorrowData) && !isset($tomorrowData['error'])) {
+            $priceData = array_merge($priceData, $tomorrowData);
+        }
     }
     
     // Check if we got a valid array of price data

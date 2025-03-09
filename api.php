@@ -69,6 +69,21 @@ function fetchPriceData($date, $area) {
     $api_date = date('Y', strtotime($date)) . '/' . date('m-d', strtotime($date));
     $json_url = "https://www.elprisetjustnu.se/api/v1/prices/{$api_date}_{$area}.json";
 
+    // Check if requesting tomorrow's data and if it's too early (before 13:45)
+    $tomorrow = date('Y-m-d', strtotime('+1 day'));
+    $requested_date = date('Y-m-d', strtotime($date));
+    
+    if ($requested_date == $tomorrow) {
+        $current_hour = (int)date('G');
+        $current_minute = (int)date('i');
+        $current_time_in_minutes = $current_hour * 60 + $current_minute;
+        $release_time_in_minutes = 13 * 60 + 45; // 13:45 in minutes
+        
+        if ($current_time_in_minutes < $release_time_in_minutes) {
+            return ['error' => true, 'message' => 'Tomorrow\'s prices are not available until 13:45'];
+        }
+    }
+
     $context = stream_context_create(['http' => ['ignore_errors' => true]]);
     $response = file_get_contents($json_url, false, $context);
     
@@ -110,6 +125,19 @@ if (!in_array($area, VALID_AREAS)) {
 // Fetch data for requested days
 $all_prices = [];
 for ($i = $days - 1; $i >= -1; $i--) {  // -1 to include tomorrow
+    // Skip tomorrow's prices if current time is before 13:45
+    if ($i == -1) {
+        $current_hour = (int)date('G');
+        $current_minute = (int)date('i');
+        $current_time_in_minutes = $current_hour * 60 + $current_minute;
+        $release_time_in_minutes = 13 * 60 + 45; // 13:45 in minutes
+        
+        if ($current_time_in_minutes < $release_time_in_minutes) {
+            // Skip fetching tomorrow's prices as they're not published yet
+            continue;
+        }
+    }
+    
     $date = date('Y/m-d', strtotime("-$i days"));
     $day_prices = fetchPriceData($date, $area);
     

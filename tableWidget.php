@@ -38,22 +38,39 @@ try {
     $area = DEFAULT_AREA;
     $priceData = [];
     
+    // Get yesterday's price data
+    $yesterdayData = fetchPriceData(date('Y/m-d', strtotime('-1 day')), $area);
+    if (is_array($yesterdayData) && !isset($yesterdayData['error'])) {
+        $priceData = array_merge($priceData, $yesterdayData);
+    }
+    
     // Get today's price data
     $todayData = fetchPriceData(date('Y/m-d'), $area);
     if (is_array($todayData) && !isset($todayData['error'])) {
-        $priceData = $todayData;
+        $priceData = array_merge($priceData, $todayData);
     }
     
-    // Try to get tomorrow's price data
-    $tomorrowData = fetchPriceData(date('Y/m-d', strtotime('+1 day')), $area);
-    if (is_array($tomorrowData) && !isset($tomorrowData['error'])) {
-        $priceData = array_merge($priceData, $tomorrowData);
+    // Only try to get tomorrow's price data if it's after 13:45
+    $current_hour = (int)date('G');
+    $current_minute = (int)date('i');
+    $current_time_in_minutes = $current_hour * 60 + $current_minute;
+    $release_time_in_minutes = 13 * 60 + 45; // 13:45 in minutes
+    
+    if ($current_time_in_minutes >= $release_time_in_minutes) {
+        // Try to get tomorrow's price data
+        $tomorrowData = fetchPriceData(date('Y/m-d', strtotime('+1 day')), $area);
+        if (is_array($tomorrowData) && !isset($tomorrowData['error'])) {
+            $priceData = array_merge($priceData, $tomorrowData);
+        }
     }
     
     // Check if we got a valid array of price data
     if (empty($priceData)) {
         throw new Exception("Failed to fetch price data: No valid data available");
     }
+    
+    // Calculate the average price across all days
+    $averagePrice = calculateAveragePrice($priceData);
     
     // Create the base image with alpha channel
     $image = imagecreatetruecolor($width, $height);
@@ -110,8 +127,34 @@ try {
         $startTime = new DateTime($price['time_start']);
         $hour = (int)$startTime->format('G');
         $day = (int)$startTime->format('j');
+        $month = (int)$startTime->format('n');
+        $year = (int)$startTime->format('Y');
         $today = (int)$now->format('j');
+        $thisMonth = (int)$now->format('n');
+        $thisYear = (int)$now->format('Y');
         $timestamp = $startTime->getTimestamp();
+        
+        // STRICT DATE FILTERING - Only include today and tomorrow
+        // Only process data from current year and month
+        if ($year != $thisYear || $month != $thisMonth) {
+            continue;
+        }
+        
+        // Only process today and tomorrow
+        $tomorrow = $today + 1;
+        $isToday = ($day == $today);
+        $isTomorrow = ($day == $tomorrow);
+        
+        // Handle month boundary cases
+        $daysInMonth = (int)$now->format('t');
+        if ($today == $daysInMonth && $day == 1) {
+            $isTomorrow = true; // First day of next month
+        }
+        
+        // Skip if not today or tomorrow
+        if (!$isToday && !$isTomorrow) {
+            continue;
+        }
         
         // Determine if this is the current hour
         $isSameDay = $day === $today;
@@ -122,17 +165,24 @@ try {
                 'price' => $price['total_price'],
                 'time' => $startTime,
                 'hour' => $hour,
-                'day' => $day
+                'day' => $day,
+                'month' => $month,
+                'year' => $year
             ];
         } 
-        // Collect future hours
-        elseif ($timestamp > $now->getTimestamp()) {
+        // Collect future hours (only for today and tomorrow)
+        elseif ($timestamp > $now->getTimestamp() && $price['total_price'] > 0) {
+            // Calculate hours away - using the exact hour difference, NOT forcing minimum 1
+            $hoursAway = floor(($timestamp - $now->getTimestamp()) / 3600);
+            
             $futureHours[] = [
                 'price' => $price['total_price'],
                 'time' => $startTime,
                 'hour' => $hour,
                 'day' => $day,
-                'hoursAway' => floor(($timestamp - $now->getTimestamp()) / 3600)
+                'month' => $month,
+                'year' => $year,
+                'hoursAway' => $hoursAway
             ];
         }
     }
@@ -147,40 +197,148 @@ try {
         $closestPrice = $priceData[0];
         $startTime = new DateTime($closestPrice['time_start']);
         $currentPrice = [
-            'price' => $closestPrice['total_price'],
+            'price' => max(1, $closestPrice['total_price']), // Ensure we never have zero price
             'time' => $startTime,
             'hour' => (int)$startTime->format('G'),
-            'day' => (int)$startTime->format('j')
+            'day' => (int)$startTime->format('j'),
+            'month' => (int)$startTime->format('n'),
+            'year' => (int)$startTime->format('Y')
         ];
     }
     
-    // Select the next 12 hours
-    $next12Hours = array_slice($futureHours, 0, 12);
+    // Select the next 12 hours (or fewer if not enough data)
+    $next12Hours = array_slice($futureHours, 0, min(12, count($futureHours)));
     $next12HourKeys = array_map(function($item) {
         return $item['hour'] . '-' . $item['day'];
     }, $next12Hours);
     
-    // Find the 3 cheapest hours in the future
-    usort($futureHours, function($a, $b) {
+    // Check if the current hour is cheaper than all future hours
+    $isCurrentHourCheapest = true;
+    $currentHourPrice = $currentPrice['price'];
+    
+    foreach ($futureHours as $hour) {
+        if ($hour['price'] < $currentHourPrice) {
+            $isCurrentHourCheapest = false;
+            break;
+        }
+    }
+    
+    // First, check if the current hour is among the cheapest
+    // Create an array with all hours including current hour
+    $allHoursForComparison = $futureHours;
+    
+    // Add current hour to the comparison
+    $allHoursForComparison[] = [
+        'price' => $currentPrice['price'],
+        'time' => $currentPrice['time'],
+        'hour' => $currentPrice['hour'],
+        'day' => $currentPrice['day'],
+        'month' => $currentPrice['month'] ?? (int)$now->format('n'),
+        'year' => $currentPrice['year'] ?? (int)$now->format('Y'),
+        'hoursAway' => 0,
+        'isCurrent' => true
+    ];
+    
+    // Apply strict validation to make absolutely sure we only show valid hours
+    $validHours = array_filter($allHoursForComparison, function($hour) use ($now) {
+        // Make sure price is positive
+        if ($hour['price'] <= 0) {
+            return false;
+        }
+        
+        // Special case for current hour
+        if (isset($hour['isCurrent']) && $hour['isCurrent']) {
+            return true;
+        }
+        
+        // Only include hours from today and tomorrow
+        $hourDate = $hour['time'];
+        $hourDay = (int)$hourDate->format('j');
+        $hourMonth = (int)$hourDate->format('n');
+        $hourYear = (int)$hourDate->format('Y');
+        
+        $today = (int)$now->format('j');
+        $thisMonth = (int)$now->format('n');
+        $thisYear = (int)$now->format('Y');
+        
+        // Must be current year and month
+        if ($hourYear != $thisYear || $hourMonth != $thisMonth) {
+            return false;
+        }
+        
+        // Must be today or tomorrow
+        $tomorrow = $today + 1;
+        if ($hourDay == $today || $hourDay == $tomorrow) {
+            return true;
+        }
+        
+        // Handle month boundary
+        $daysInMonth = (int)$now->format('t');
+        if ($today == $daysInMonth && $hourDay == 1) {
+            return true; // First day of next month
+        }
+        
+        return false;
+    });
+    
+    // Sort by price to find cheapest
+    $validHoursByPrice = $validHours;
+    usort($validHoursByPrice, function($a, $b) {
         return $a['price'] - $b['price'];
     });
     
-    $cheapest3Hours = array_slice($futureHours, 0, 3);
+    // Take the 3 cheapest hours
+    $cheapestHours = array_slice($validHoursByPrice, 0, min(3, count($validHoursByPrice)));
     
-    // Filter out the cheapest hours that are already in the next 12 hours
-    $additionalCheapHours = array_filter($cheapest3Hours, function($item) use ($next12HourKeys) {
-        $key = $item['hour'] . '-' . $item['day'];
-        return !in_array($key, $next12HourKeys);
-    });
+    // Create a lookup array of the cheapest hours
+    $cheapestHoursKeys = [];
+    foreach ($cheapestHours as $hour) {
+        $key = "";
+        if (isset($hour['isCurrent']) && $hour['isCurrent']) {
+            $key = "current";
+        } else {
+            $key = $hour['hour'] . '-' . $hour['day'];
+        }
+        $cheapestHoursKeys[$key] = true;
+    }
     
-    // Load fonts
+    // Find those hours in the original array to preserve order by time
+    $cheapestHoursByTime = [];
+    
+    // First check for current hour
+    if (isset($cheapestHoursKeys['current'])) {
+        $cheapestHoursByTime[] = [
+            'price' => $currentPrice['price'],
+            'time' => $currentPrice['time'],
+            'hour' => $currentPrice['hour'],
+            'day' => $currentPrice['day'],
+            'month' => $currentPrice['month'] ?? (int)$now->format('n'),
+            'year' => $currentPrice['year'] ?? (int)$now->format('Y'),
+            'hoursAway' => 0,
+            'isCurrent' => true
+        ];
+    }
+    
+    // Then add future hours in time order
+    foreach ($validHours as $hour) {
+        if (isset($hour['isCurrent']) && $hour['isCurrent']) {
+            continue; // Skip current hour as we already handled it
+        }
+        
+        $key = $hour['hour'] . '-' . $hour['day'];
+        if (isset($cheapestHoursKeys[$key])) {
+            $cheapestHoursByTime[] = $hour;
+        }
+    }
+    
+    // Load fonts first
     $fonts = loadRobotoFonts();
     
     // Draw the table header
     drawTableHeader($image, $width, $padding, $headerHeight, $colors, $fonts, $currentPrice, $scaleFactor);
     
     // Calculate how many rows we need to display
-    $totalRows = count($next12Hours) + (!empty($additionalCheapHours) ? count($additionalCheapHours) + 1 : 0); // +1 for separator
+    $totalRows = count($next12Hours) + (count($cheapestHoursByTime) > 0 ? count($cheapestHoursByTime) + 1 : 0); // +1 for separator
     
     // Calculate available height for rows
     $availableHeight = $height - $headerHeight - round(40 * $scaleFactor); // 40px for padding
@@ -193,16 +351,16 @@ try {
     $colWidths = calculateColumnWidths($width, $padding, $scaleFactor);
     
     // Draw the 12 hour rows
-    drawHourRows($image, $next12Hours, $currentPrice, $tableStartY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor);
+    drawHourRows($image, $next12Hours, $currentPrice, $tableStartY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, false, $averagePrice);
     
-    // Draw separator
-    if (!empty($additionalCheapHours)) {
+    // Now draw the cheapest hours section after we've calculated the layout variables
+    if (!empty($cheapestHoursByTime)) {
         $separatorY = $tableStartY + (count($next12Hours) * $rowHeight);
         drawSeparator($image, $width, $padding, $separatorY, $colors, $fonts, $scaleFactor);
         
-        // Draw the cheapest hours (if not already in the 12 hours)
-        drawHourRows($image, $additionalCheapHours, $currentPrice, $separatorY + $rowHeight, 
-                     $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, true);
+        // Draw the cheapest hours (in time order)
+        drawHourRows($image, $cheapestHoursByTime, $currentPrice, $separatorY + $rowHeight, 
+                     $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, true, $averagePrice);
     }
     
     // Clear any output buffered content before sending image
@@ -241,10 +399,13 @@ function loadRobotoFonts() {
 function calculateColumnWidths($width, $padding, $scaleFactor) {
     $totalWidth = $width - (2 * $padding);
     
+    // Reserve extra space for the percentage bars
+    $percentBarWidth = round(25 * $scaleFactor); // Bar width + spacing
+    
     return [
         'time' => round($totalWidth * 0.25),
-        'price' => round($totalWidth * 0.25),
-        'diff' => round($totalWidth * 0.25),
+        'price' => round($totalWidth * 0.20),
+        'diff' => round($totalWidth * 0.30), // More space for percentage + bar
         'hours' => round($totalWidth * 0.25)
     ];
 }
@@ -262,7 +423,7 @@ function drawTableHeader($image, $width, $padding, $headerHeight, $colors, $font
     $unitFontSize = round(16 * $scaleFactor);
     
     // Draw title text
-    $title = "ELPRIS TABELL";
+    $title = "ELPRISTABELL";
     if (is_string($fonts['bold']) && function_exists('imagettftext')) {
         // Draw title
         imagettftext($image, $titleFontSize, 0, $padding, 30 * $scaleFactor, 
@@ -326,7 +487,7 @@ function drawSeparator($image, $width, $padding, $y, $colors, $fonts, $scaleFact
 /**
  * Draw hour rows
  */
-function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, $isHighlighted = false) {
+function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, $isHighlighted = false, $averagePrice = null) {
     $rowCount = count($hours);
     $colX = calculateColumnX($colWidths);
     
@@ -357,21 +518,45 @@ function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWi
         
         // Check if this is a different day
         if ($hour['day'] != $currentPrice['day']) {
-            $dayIndicator = "+" . ($hour['day'] - $currentPrice['day']) . "d";
+            // Only show day indicators for reasonable dates (within next month)
+            if (isset($hour['month']) && isset($currentPrice['month'])) {
+                if ($hour['month'] == $currentPrice['month'] || 
+                    ($hour['month'] == $currentPrice['month'] + 1 && $currentPrice['day'] >= 28)) {
+                    $dayIndicator = "+" . ($hour['day'] - $currentPrice['day']) . "d";
+                }
+            } else {
+                $dayIndicator = "+" . ($hour['day'] - $currentPrice['day']) . "d";
+            }
         }
         
         // Format price
         $priceText = round($hour['price']);
         
         // Calculate price difference
-        $priceDiff = $currentPrice['price'] != 0 ? 
-            round(($hour['price'] - $currentPrice['price']) / $currentPrice['price'] * 100) : 0;
+        if ($currentPrice['price'] > 0) {
+            $priceDiff = round(($hour['price'] - $currentPrice['price']) / $currentPrice['price'] * 100);
+        } else {
+            // If current price is zero or very close to zero, handle differently
+            $priceDiff = $hour['price'] > 0 ? 100 : 0; // If future price > 0, it's 100% more expensive
+        }
         
         $diffText = $priceDiff >= 0 ? "+" . $priceDiff . "%" : $priceDiff . "%";
         $diffColor = $priceDiff > 0 ? $colors['highPriceColor'] : $colors['lowPriceColor'];
         
-        // Format hours away
-        $hoursAwayText = $hour['hoursAway'] . "h";
+        // Special case for current hour in cheapest section
+        if (isset($hour['isCurrent']) && $hour['isCurrent']) {
+            $diffText = "AKTUELL";
+            $hoursAwayText = "NU";
+        } else {
+            // Format hours away with a + sign
+            $hoursAwayText = "+" . $hour['hoursAway'] . "h";
+        }
+        
+        // Determine price text color based on comparison to average price
+        $priceColor = $colors['textColor']; // Default
+        if ($averagePrice !== null && $averagePrice > 0) {
+            $priceColor = getPriceColor($hour['price'], $averagePrice, $image);
+        }
         
         if (is_string($fonts['regular']) && function_exists('imagettftext')) {
             // Draw time
@@ -388,13 +573,43 @@ function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWi
                           $colors['lightText'], $fonts['regular'], $dayIndicator);
             }
                         
-            // Draw price
+            // Draw price with calculated color
             imagettftext($image, $priceFontSize, 0, $colX['price'], $rowY + $rowHeight / 2 + $priceFontSize/2, 
-                        $colors['textColor'], $fonts['bold'], $priceText);
-                        
-            // Draw difference
-            imagettftext($image, $diffFontSize, 0, $colX['diff'], $rowY + $rowHeight / 2 + $diffFontSize/2, 
-                        $diffColor, $fonts['bold'], $diffText);
+                        $priceColor, $fonts['bold'], $priceText);
+            
+            // Special handling for "AKTUELL" text (no visual bar needed)
+            if ($diffText === "AKTUELL") {
+                // Just draw the text with accent color
+                imagettftext($image, $diffFontSize, 0, $colX['diff'], $rowY + $rowHeight / 2 + $diffFontSize/2, 
+                            $colors['accentColor'], $fonts['bold'], $diffText);
+            } else {
+                // Draw visual percentage bar to left of percentage text
+                $maxBarWidth = round(20 * $scaleFactor); // Maximum bar width
+                $barHeight = round(8 * $scaleFactor);  // Bar height
+                
+                // Calculate absolute percentage (without + or - sign)
+                $absPercentage = abs($priceDiff);
+                
+                // Limit to 100% for bar width calculation
+                $barPercentage = min(100, $absPercentage) / 100;
+                $barWidth = round($barPercentage * $maxBarWidth);
+                
+                // Don't draw bar if percentage is very small
+                if ($barWidth > 0) {
+                    // Position the bar vertically centered with text
+                    $barY = $rowY + $rowHeight / 2 - $barHeight / 2;
+                    
+                    // Draw the bar to the left of the percentage text
+                    $barX = $colX['diff'] - $barWidth - round(5 * $scaleFactor);
+                    
+                    // Use the same color as the percentage text
+                    imagefilledrectangle($image, $barX, $barY, $barX + $barWidth, $barY + $barHeight, $diffColor);
+                }
+                
+                // Draw the percentage text
+                imagettftext($image, $diffFontSize, 0, $colX['diff'], $rowY + $rowHeight / 2 + $diffFontSize/2, 
+                            $diffColor, $fonts['bold'], $diffText);
+            }
                         
             // Draw hours away
             imagettftext($image, $diffFontSize, 0, $colX['hours'], $rowY + $rowHeight / 2 + $diffFontSize/2, 
@@ -410,8 +625,41 @@ function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWi
                            $rowY + ($rowHeight/2) - 5, $dayIndicator, $colors['lightText']);
             }
             
-            imagestring($image, 5, $colX['price'], $rowY + ($rowHeight/2) - 7, $priceText, $colors['textColor']);
-            imagestring($image, 4, $colX['diff'], $rowY + ($rowHeight/2) - 7, $diffText, $diffColor);
+            // Draw price with calculated color
+            imagestring($image, 5, $colX['price'], $rowY + ($rowHeight/2) - 7, $priceText, $priceColor);
+            
+            // Special handling for "AKTUELL" text (no visual bar needed)
+            if ($diffText === "AKTUELL") {
+                // Just draw the text with accent color
+                imagestring($image, 4, $colX['diff'], $rowY + ($rowHeight/2) - 7, $diffText, $colors['accentColor']);
+            } else {
+                // Draw visual percentage bar to left of percentage text
+                $maxBarWidth = round(20 * $scaleFactor); // Maximum bar width
+                $barHeight = round(6 * $scaleFactor);  // Bar height slightly smaller for built-in fonts
+                
+                // Calculate absolute percentage (without + or - sign)
+                $absPercentage = abs($priceDiff);
+                
+                // Limit to 100% for bar width calculation
+                $barPercentage = min(100, $absPercentage) / 100;
+                $barWidth = round($barPercentage * $maxBarWidth);
+                
+                // Don't draw bar if percentage is very small
+                if ($barWidth > 0) {
+                    // Position the bar vertically centered with text
+                    $barY = $rowY + ($rowHeight/2) - $barHeight / 2 - 2; // Small adjustment for text alignment
+                    
+                    // Draw the bar to the left of the percentage text
+                    $barX = $colX['diff'] - $barWidth - 5;
+                    
+                    // Use the same color as the percentage text
+                    imagefilledrectangle($image, $barX, $barY, $barX + $barWidth, $barY + $barHeight, $diffColor);
+                }
+                
+                // Draw the percentage text
+                imagestring($image, 4, $colX['diff'], $rowY + ($rowHeight/2) - 7, $diffText, $diffColor);
+            }
+            
             imagestring($image, 4, $colX['hours'], $rowY + ($rowHeight/2) - 7, $hoursAwayText, $colors['lightText']);
         }
         
@@ -433,7 +681,7 @@ function calculateColumnX($colWidths) {
     return [
         'time' => $x1,
         'price' => $x2,
-        'diff' => $x3,
+        'diff' => $x3 + round($colWidths['diff'] * 0.4), // Offset right to make space for bar
         'hours' => $x4,
         'end' => $x5
     ];
@@ -476,4 +724,57 @@ function outputErrorImage($e) {
     
     // Log the error
     error_log("Table widget error: " . $e->getMessage());
+}
+
+/**
+ * Calculate weighted average price from an array of price data
+ */
+function calculateAveragePrice($priceData) {
+    $totalHours = 0;
+    $totalPrice = 0;
+    
+    foreach ($priceData as $price) {
+        // Only include positive price values
+        if (isset($price['total_price']) && $price['total_price'] > 0) {
+            $totalPrice += $price['total_price'];
+            $totalHours++;
+        }
+    }
+    
+    if ($totalHours === 0) {
+        return 0; // Avoid division by zero
+    }
+    
+    return $totalPrice / $totalHours;
+}
+
+/**
+ * Calculate color for price text based on comparison to average
+ * Returns an RGB color array
+ */
+function getPriceColor($price, $averagePrice, $image) {
+    // Default to white if average price is 0 (avoid division by zero)
+    if ($averagePrice <= 0) {
+        return imagecolorallocate($image, 255, 255, 255);
+    }
+    
+    // Calculate the percentage of the current price compared to average
+    $percentage = ($price / $averagePrice) * 100;
+    
+    // Stay white for prices within ±20% of average
+    if ($percentage >= 80 && $percentage <= 120) {
+        return imagecolorallocate($image, 255, 255, 255);
+    }
+    
+    if ($percentage < 80) {
+        // Green gradient for low prices (50% or less is full green)
+        // Map 50%-80% to 0-255 for the red and blue components
+        $intensity = min(255, max(0, (($percentage - 50) / 30) * 255));
+        return imagecolorallocate($image, $intensity, 255, $intensity);
+    } else {
+        // Red gradient for high prices (200% or more is full red)
+        // Map 120%-200% to 255-0 for the green and blue components
+        $intensity = min(255, max(0, (1 - (($percentage - 120) / 80)) * 255));
+        return imagecolorallocate($image, 255, $intensity, $intensity);
+    }
 } 
