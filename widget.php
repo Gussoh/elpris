@@ -122,20 +122,27 @@ try {
     // Process the price data
     $now = new DateTime();
     $currentHour = (int)$now->format('G');
-    
+
     // Sort the price data by time to ensure chronological order
     usort($priceData, function($a, $b) {
         return strtotime($a['time_start']) - strtotime($b['time_start']);
     });
-    
+
     // Extract and process price data
-    list($prices, $hourPrices, $currentPrice, $lowestPrice, $lowestPriceHour) = processPriceData($priceData, $now, $currentHour);
-    
+    list($prices, $periodPrices, $currentPrice, $lowestPrice, $lowestPricePeriod) = processPriceData($priceData, $now, $currentHour);
+
+    // Determine the current 15-minute period window for the heading
+    $currentMinute = (int)$now->format('i');
+    $quarterMinute = floor($currentMinute / 15) * 15;
+    $currentPeriodStart = (clone $now)->setTime((int)$now->format('G'), $quarterMinute, 0);
+    $currentPeriodEnd = (clone $currentPeriodStart);
+    $currentPeriodEnd->modify('+15 minutes');
+
     // Find cheapest 3-hour period
-    list($cheapest3hStart, $cheapest3hPrice) = findCheapest3HourPeriod($hourPrices, $now);
+    list($cheapest3hStart, $cheapest3hPrice) = findCheapest3HourPeriod($periodPrices, $now);
     
     // Calculate time differences and price differences
-    list($hoursUntilLowest, $minutesRemaining, $priceDiffLowest) = calculateTimeDifference($lowestPriceHour, $now, $currentPrice, $lowestPrice);
+    list($hoursUntilLowest, $minutesRemaining, $priceDiffLowest) = calculateTimeDifference($lowestPricePeriod, $now, $currentPrice, $lowestPrice);
     list($hoursUntilCheapest3h, $minutesUntilCheapest3h, $priceDiff3h) = calculateTimeDifference($cheapest3hStart, $now, $currentPrice, $cheapest3hPrice);
     
     // Load fonts
@@ -155,12 +162,12 @@ try {
         // Draw grid and graph elements
         drawGrid($image, $graphPadding, $width, $graphBottom, $graphHeight, $graphTop, $colors['gridColor']);
         drawBaseLineEffect($image, $graphPadding, $width, $graphBottom);
-        drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $graphPadding, $graphWidth, $graphHeight, 
+        drawPriceGraph($image, $periodPrices, $currentHour, $valueRange, $graphPadding, $graphWidth, $graphHeight,
                         $graphBottom, $graphTop, $lowThreshold, $highThreshold, $colors);
     }
     
     // Format text elements
-    $textElements = formatTextElements($currentHour, $currentPrice, 
+    $textElements = formatTextElements($currentPeriodStart, $currentPeriodEnd, $currentPrice, 
                                       $hoursUntilLowest, $minutesRemaining, $priceDiffLowest,
                                       $hoursUntilCheapest3h, $minutesUntilCheapest3h, $priceDiff3h,
                                       $colors);
@@ -239,111 +246,109 @@ function drawCircuitPatterns($image, $padding, $width, $height, $circuitColor) {
  */
 function processPriceData($priceData, $now, $currentHour) {
     $prices = [];
-    $hourPrices = [];
+    $periodPrices = [];
     $currentPrice = null;
     $lowestPrice = PHP_FLOAT_MAX;
-    $lowestPriceHour = null;
-    
+    $lowestPricePeriod = null;
+
     // Extract price values and find current/lowest prices
     foreach ($priceData as $price) {
         $startTime = new DateTime($price['time_start']);
         $hour = (int)$startTime->format('G');
+        $minute = (int)$startTime->format('i');
         $day = (int)$startTime->format('j');
         $today = (int)$now->format('j');
-        
-        // Create unique hour keys for multi-day data (hour+day*100)
-        $hourKey = $hour + ($day * 100);
-        
+
+        // Create unique period keys for multi-day data (day*10000 + hour*100 + minute)
+        $periodKey = $day * 10000 + $hour * 100 + $minute;
+
         $prices[] = $price['total_price'];
-        $hourPrices[$hourKey] = [
+        $periodPrices[$periodKey] = [
             'price' => $price['total_price'],
-            'time' => $startTime
+            'time' => $startTime,
+            'day' => $day,
+            'hour' => $hour,
+            'minute' => $minute
         ];
-        
-        // Determine if this is the current hour
+
+        // Determine if this is the current period (within the current hour)
         $isSameDay = $day === $today;
         $isSameHour = $hour === $currentHour;
         if ($isSameDay && $isSameHour) {
             $currentPrice = $price['total_price'];
         }
-        
-        // Only consider future hours for lowest price
+
+        // Only consider future periods for lowest price
         if ($startTime > $now && $price['total_price'] < $lowestPrice) {
             $lowestPrice = $price['total_price'];
-            $lowestPriceHour = $startTime;
+            $lowestPricePeriod = $startTime;
         }
     }
-    
-    // If no future hours are available, use the minimum of all prices
+
+    // If no future periods are available, use the minimum of all prices
     if ($lowestPrice === PHP_FLOAT_MAX && !empty($prices)) {
         $lowestPrice = min($prices);
-        foreach ($hourPrices as $hourKey => $hourData) {
-            if ($hourData['price'] == $lowestPrice) {
-                $lowestPriceHour = $hourData['time'];
+        foreach ($periodPrices as $periodKey => $periodData) {
+            if ($periodData['price'] == $lowestPrice) {
+                $lowestPricePeriod = $periodData['time'];
                 break;
             }
         }
     }
-    
-    // Make sure we have a complete 24-hour set for today for display
-    if (!empty($prices)) {
-        $avgPrice = array_sum($prices) / count($prices);
-        $today = (int)$now->format('j');
-        
-        for ($h = 0; $h < 24; $h++) {
-            $hourKey = $h + ($today * 100);
-            if (!isset($hourPrices[$hourKey])) {
-                $hourPrices[$hourKey] = [
-                    'price' => $avgPrice,
-                    'time' => (new DateTime())->setTime($h, 0)
-                ];
-            }
-        }
-    }
-    
-    return [$prices, $hourPrices, $currentPrice, $lowestPrice, $lowestPriceHour];
+
+    return [$prices, $periodPrices, $currentPrice, $lowestPrice, $lowestPricePeriod];
 }
 
 /**
- * Find the cheapest consecutive 3-hour period
+ * Find the cheapest consecutive 3-hour period (12 consecutive 15-minute periods)
  */
-function findCheapest3HourPeriod($hourPrices, $now) {
+function findCheapest3HourPeriod($periodPrices, $now) {
     $cheapest3hStart = null;
     $cheapest3hPrice = PHP_FLOAT_MAX;
-    
-    // We need at least 3 hours of data
-    if (count($hourPrices) >= 3) {
-        // Get all hourKeys in order
-        $hourKeys = array_keys($hourPrices);
-        sort($hourKeys);
-        
-        // Look for cheapest consecutive 3-hour period in future
-        for ($i = 0; $i < count($hourKeys) - 2; $i++) {
-            $key1 = $hourKeys[$i];
-            $key2 = $hourKeys[$i + 1];
-            $key3 = $hourKeys[$i + 2];
-            
-            // Check if these are consecutive hours (could be across days)
-            $time1 = $hourPrices[$key1]['time'];
-            $time2 = $hourPrices[$key2]['time'];
-            $time3 = $hourPrices[$key3]['time'];
-            
-            $diff1 = ($time2->getTimestamp() - $time1->getTimestamp()) / 3600;
-            $diff2 = ($time3->getTimestamp() - $time2->getTimestamp()) / 3600;
-            
-            // Only consider if they're consecutive hours (1 hour apart)
-            if ($diff1 == 1 && $diff2 == 1) {
-                $periodAvg = ($hourPrices[$key1]['price'] + $hourPrices[$key2]['price'] + $hourPrices[$key3]['price']) / 3;
-                
+
+    // We need at least 12 periods (3 hours) of data
+    if (count($periodPrices) >= 12) {
+        // Get all periodKeys in order
+        $periodKeys = array_keys($periodPrices);
+        sort($periodKeys);
+
+        // Look for cheapest consecutive 12-period (3-hour) period in future
+        for ($i = 0; $i < count($periodKeys) - 11; $i++) {
+            $periodStartTime = $periodPrices[$periodKeys[$i]]['time'];
+            $totalPrice = 0;
+            $isConsecutive = true;
+
+            // Check if the next 11 periods are consecutive (15 minutes apart)
+            for ($j = 0; $j < 12; $j++) {
+                $currentKey = $periodKeys[$i + $j];
+                $currentTime = $periodPrices[$currentKey]['time'];
+
+                // Expected time for this position in the 3-hour window
+                $expectedTime = clone $periodStartTime;
+                $expectedTime->modify('+' . ($j * 15) . ' minutes');
+
+                // Check if this period is at the expected time
+                if ($currentTime->getTimestamp() != $expectedTime->getTimestamp()) {
+                    $isConsecutive = false;
+                    break;
+                }
+
+                $totalPrice += $periodPrices[$currentKey]['price'];
+            }
+
+            // Only consider if all 12 periods are consecutive
+            if ($isConsecutive) {
+                $periodAvg = $totalPrice / 12;
+
                 // Only consider future periods
-                if ($time1 > $now && $periodAvg < $cheapest3hPrice) {
+                if ($periodStartTime > $now && $periodAvg < $cheapest3hPrice) {
                     $cheapest3hPrice = $periodAvg;
-                    $cheapest3hStart = $time1;
+                    $cheapest3hStart = $periodStartTime;
                 }
             }
         }
     }
-    
+
     return [$cheapest3hStart, $cheapest3hPrice];
 }
 
@@ -425,113 +430,113 @@ function drawBaseLineEffect($image, $padding, $width, $graphBottom) {
 /**
  * Draw the price graph
  */
-function drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $padding, $graphWidth, $graphHeight, 
+function drawPriceGraph($image, $periodPrices, $currentHour, $valueRange, $padding, $graphWidth, $graphHeight,
                       $graphBottom, $graphTop, $lowThreshold, $highThreshold, $colors) {
     // Get current date/time information
     $now = new DateTime();
     $today = (int)$now->format('j');
     $tomorrow = (int)$now->format('j') + 1;
-    
-    // Organize hours into past, present, and future
-    $pastHours = [];
-    $futureHours = [];
-    $currentHourData = null;
-    
-    // Sort all hours by time
-    $allHours = [];
-    foreach ($hourPrices as $hourKey => $hourData) {
-        $day = floor($hourKey / 100);
-        $hour = $hourKey % 100;
-        $timestamp = $hourData['time']->getTimestamp();
-        
-        $allHours[$timestamp] = [
-            'day' => $day,
-            'hour' => $hour,
-            'hourKey' => $hourKey,
-            'price' => $hourData['price'],
-            'time' => $hourData['time']
+
+    // Organize periods into past, present, and future
+    $pastPeriods = [];
+    $futurePeriods = [];
+    $currentPeriodData = null;
+
+    // Sort all periods by time
+    $allPeriods = [];
+    foreach ($periodPrices as $periodKey => $periodData) {
+        $timestamp = $periodData['time']->getTimestamp();
+
+        $allPeriods[$timestamp] = [
+            'day' => $periodData['day'],
+            'hour' => $periodData['hour'],
+            'minute' => $periodData['minute'],
+            'periodKey' => $periodKey,
+            'price' => $periodData['price'],
+            'time' => $periodData['time']
         ];
     }
-    
+
     // Sort by timestamp
-    ksort($allHours);
-    
-    // Identify current hour, past hours, and future hours
-    foreach ($allHours as $timestamp => $hourData) {
-        $time = $hourData['time'];
-        
-        // The exact current hour starts at the current hour and extends to the next hour
-        $hourStart = clone $hourData['time']; // Time at the start of this hour
-        $hourEnd = clone $hourData['time'];
-        $hourEnd->modify('+1 hour'); // Time at the end of this hour
-        
-        // Check if current time falls within this hour's range
-        if ($now >= $hourStart && $now < $hourEnd) {
-            // This is the current hour
-            $currentHourData = $hourData;
-        } elseif ($now > $hourEnd) {
-            // This is a past hour
-            $pastHours[] = $hourData;
+    ksort($allPeriods);
+
+    // Identify current period, past periods, and future periods
+    foreach ($allPeriods as $timestamp => $periodData) {
+        $time = $periodData['time'];
+
+        // Check if this period contains the current time
+        $periodStart = clone $periodData['time'];
+        $periodEnd = clone $periodData['time'];
+        $periodEnd->modify('+15 minutes');
+
+        // Check if current time falls within this period's range
+        if ($now >= $periodStart && $now < $periodEnd) {
+            // This is the current period
+            $currentPeriodData = $periodData;
+        } elseif ($now > $periodEnd) {
+            // This is a past period
+            $pastPeriods[] = $periodData;
         } else {
-            // This is a future hour
-            $futureHours[] = $hourData;
+            // This is a future period
+            $futurePeriods[] = $periodData;
         }
     }
     
-    // Make sure we have the current hour data
-    if (empty($currentHourData) && !empty($pastHours)) {
-        // If current hour not found, use the most recent past hour as current
-        $currentHourData = array_pop($pastHours);
-        if (!empty($pastHours)) {
-            array_push($pastHours, $currentHourData); // Put it back for proper order
+    // Make sure we have the current period data
+    if (empty($currentPeriodData) && !empty($pastPeriods)) {
+        // If current period not found, use the most recent past period as current
+        $currentPeriodData = array_pop($pastPeriods);
+        if (!empty($pastPeriods)) {
+            array_push($pastPeriods, $currentPeriodData); // Put it back for proper order
         }
     }
-    
-    // Always show all future hours
-    $futureHoursToShow = count($futureHours);
-    
-    // Always show at least 2 hours of past data if available (plus current hour)
-    $minPastHoursToShow = min(count($pastHours), 2);
-    
-    // Calculate total hours to show
-    $totalHoursToShow = $minPastHoursToShow + (empty($currentHourData) ? 0 : 1) + $futureHoursToShow;
-    
-    // Select which hours to show
-    $hoursToShow = [];
-    
-    // Add past hours (most recent first)
-    if ($minPastHoursToShow > 0) {
-        $pastHoursSlice = array_slice($pastHours, -$minPastHoursToShow);
-        foreach ($pastHoursSlice as $hourData) {
-            $hoursToShow[] = $hourData;
+
+    // Always show all future periods (but limit to reasonable number for display)
+    $futurePeriodsToShow = min(count($futurePeriods), 48); // Max 12 hours (48 periods) of future data
+
+    // Always show at least 8 periods (2 hours) of past data if available (plus current period)
+    $minPastPeriodsToShow = min(count($pastPeriods), 8);
+
+    // Calculate total periods to show
+    $totalPeriodsToShow = $minPastPeriodsToShow + (empty($currentPeriodData) ? 0 : 1) + $futurePeriodsToShow;
+
+    // Select which periods to show
+    $periodsToShow = [];
+
+    // Add past periods (most recent first)
+    if ($minPastPeriodsToShow > 0) {
+        $pastPeriodsSlice = array_slice($pastPeriods, -$minPastPeriodsToShow);
+        foreach ($pastPeriodsSlice as $periodData) {
+            $periodsToShow[] = $periodData;
         }
     }
-    
-    // Add current hour
-    if (!empty($currentHourData)) {
-        $hoursToShow[] = $currentHourData;
+
+    // Add current period
+    if (!empty($currentPeriodData)) {
+        $periodsToShow[] = $currentPeriodData;
     }
-    
-    // Add ALL future hours
-    foreach ($futureHours as $hourData) {
-        $hoursToShow[] = $hourData;
+
+    // Add future periods (limited)
+    $futurePeriodsSlice = array_slice($futurePeriods, 0, $futurePeriodsToShow);
+    foreach ($futurePeriodsSlice as $periodData) {
+        $periodsToShow[] = $periodData;
     }
-    
-    // Calculate block width based on total number of hours
-    $totalHoursShown = count($hoursToShow);
-    $blockWidth = $graphWidth / $totalHoursShown;
+
+    // Calculate block width based on total number of periods
+    $totalPeriodsShown = count($periodsToShow);
+    $blockWidth = $graphWidth / $totalPeriodsShown;
     
     // First pass: Draw glows for the lines
-    for ($i = 0; $i < $totalHoursShown; $i++) {
-        $hourData = $hoursToShow[$i];
-        $price = $hourData['price'];
+    for ($i = 0; $i < $totalPeriodsShown; $i++) {
+        $periodData = $periodsToShow[$i];
+        $price = $periodData['price'];
         $x1 = $padding + ($i * $blockWidth);
         $x2 = $x1 + $blockWidth;
-        
+
         // Height proportional to price value
         $blockHeight = ($price / $valueRange) * $graphHeight;
         $y = $graphBottom - $blockHeight;
-        
+
         // Determine color based on price threshold for glow effect
         if ($price >= $highThreshold) {
             $glowColor = imagecolorallocatealpha($image, 240, 80, 80, 100); // Red glow
@@ -540,7 +545,7 @@ function drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $padding
         } else {
             $glowColor = imagecolorallocatealpha($image, 240, 180, 40, 100); // Yellow/orange glow
         }
-        
+
         // Draw a wider line for the glow effect
         for ($thick = 0; $thick < 7; $thick++) {
             imageline($image, $x1, $y + $thick - 3, $x2, $y + $thick - 3, $glowColor);
@@ -549,12 +554,12 @@ function drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $padding
     
     // Draw day dividers if showing multiple days
     $dayChangeIndexes = [];
-    for ($i = 1; $i < $totalHoursShown; $i++) {
-        if ($hoursToShow[$i]['day'] != $hoursToShow[$i-1]['day']) {
+    for ($i = 1; $i < $totalPeriodsShown; $i++) {
+        if ($periodsToShow[$i]['day'] != $periodsToShow[$i-1]['day']) {
             $dayChangeIndexes[] = $i;
         }
     }
-    
+
     // Draw day dividers at midnight
     foreach ($dayChangeIndexes as $index) {
         $x = $padding + ($index * $blockWidth);
@@ -569,36 +574,36 @@ function drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $padding
         }
     }
     
-    // Find the index of the current hour for highlighting
-    $currentHourIndex = -1;
-    
-    // If we have current hour data, find its position in the display array
-    if (!empty($currentHourData)) {
-        foreach ($hoursToShow as $i => $hourData) {
-            if ($hourData['time']->getTimestamp() === $currentHourData['time']->getTimestamp()) {
-                $currentHourIndex = $i;
+    // Find the index of the current period for highlighting
+    $currentPeriodIndex = -1;
+
+    // If we have current period data, find its position in the display array
+    if (!empty($currentPeriodData)) {
+        foreach ($periodsToShow as $i => $periodData) {
+            if ($periodData['time']->getTimestamp() === $currentPeriodData['time']->getTimestamp()) {
+                $currentPeriodIndex = $i;
                 break;
             }
         }
     }
-    
-    // Draw horizontal price lines for each hour
-    for ($i = 0; $i < $totalHoursShown; $i++) {
-        $hourData = $hoursToShow[$i];
-        $price = $hourData['price'];
-        $hour = $hourData['hour'];
-        
-        // Determine if this is the current hour (either exact match or best approximation)
-        $isCurrentHour = ($i === $currentHourIndex) || 
-                         ($currentHourIndex === -1 && $i === array_search($currentHourData, $hoursToShow));
-        
+
+    // Draw horizontal price lines for each period
+    for ($i = 0; $i < $totalPeriodsShown; $i++) {
+        $periodData = $periodsToShow[$i];
+        $price = $periodData['price'];
+        $hour = $periodData['hour'];
+        $minute = $periodData['minute'];
+
+        // Determine if this is the current period
+        $isCurrentPeriod = ($i === $currentPeriodIndex);
+
         $x1 = $padding + ($i * $blockWidth);
         $x2 = $x1 + $blockWidth;
-        
+
         // Height proportional to price value
         $blockHeight = ($price / $valueRange) * $graphHeight;
         $y = $graphBottom - $blockHeight;
-        
+
         // Determine color based on price threshold
         if ($price >= $highThreshold) {
             $lineColor = $colors['highPriceColor'];
@@ -607,22 +612,22 @@ function drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $padding
         } else {
             $lineColor = $colors['midPriceColor'];
         }
-        
-        // Show hour labels for every other hour at the bottom of the graph
-        if ($hour % 2 == 0) {
-            // Position the label at the center of this hour's block
-            $hourLabel = sprintf("%02d", $hour);
-            $labelX = $x1 + ($blockWidth / 2) - (imagefontwidth(1) * strlen($hourLabel) / 2);
-            imagestring($image, 1, $labelX, $graphBottom + 2, $hourLabel, $colors['textColor']);
-            
-            // Add small price label inside the bar - only for even hours to avoid cluttering
+
+        // Show time labels for every 4th period (every hour) at the bottom of the graph
+        if ($i % 4 == 0) {
+            // Position the label at the center of this period's block
+            $timeLabel = sprintf("%02d:%02d", $hour, $minute);
+            $labelX = $x1 + ($blockWidth / 2) - (imagefontwidth(1) * strlen($timeLabel) / 2);
+            imagestring($image, 1, $labelX, $graphBottom + 2, $timeLabel, $colors['textColor']);
+
+            // Add small price label inside the bar - only for hourly intervals to avoid cluttering
             $priceLabel = round($price);
             $labelWidth = imagefontwidth(1) * strlen($priceLabel);
             $labelHeight = imagefontheight(1);
-            
+
             // Calculate position for price label - center horizontally, and position below the top line
             $labelX = $x1 + ($blockWidth / 2) - ($labelWidth / 2);
-            
+
             // Only show price if the bar is tall enough
             if ($blockHeight > $labelHeight + 4) {
                 $labelY = $y + 4; // Position it a few pixels below the top line
@@ -632,34 +637,34 @@ function drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $padding
             }
         }
         
-        // Mark current hour with a striped pattern for better visibility
-        if ($isCurrentHour) {
-            // Draw a semi-transparent filled rectangle for the current hour
-            imagefilledrectangle($image, $x1 + 1, $graphTop, $x2 - 1, $graphBottom, 
+        // Mark current period with a striped pattern for better visibility
+        if ($isCurrentPeriod) {
+            // Draw a semi-transparent filled rectangle for the current period
+            imagefilledrectangle($image, $x1 + 1, $graphTop, $x2 - 1, $graphBottom,
                             imagecolorallocatealpha($image, 255, 255, 255, 115));
-            
+
             // Add a diagonal stripe pattern for emphasis
             for ($j = 0; $j < $graphBottom - $graphTop; $j += 8) {
                 // Draw diagonal lines for a striped pattern
                 imageline($image, $x1, $graphTop + $j, $x1 + $j, $graphTop, $colors['patternColor']);
                 imageline($image, $x2 - $j, $graphBottom, $x2, $graphBottom - $j, $colors['patternColor']);
             }
-            
+
             // Draw accent color border
             imagerectangle($image, $x1, $graphTop, $x2, $graphBottom, $colors['accentColor']);
         }
-        
-        // Draw horizontal line for this hour's price - make it thicker
+
+        // Draw horizontal line for this period's price - make it thicker
         for ($thick = 0; $thick < 3; $thick++) {
             imageline($image, $x1, $y + $thick, $x2, $y + $thick, $lineColor);
         }
-        
-        // Connect to the previous hour with a vertical line if needed
+
+        // Connect to the previous period with a vertical line if needed
         if ($i > 0) {
-            $prevPrice = $hoursToShow[$i-1]['price'];
+            $prevPrice = $periodsToShow[$i-1]['price'];
             $prevY = $graphBottom - (($prevPrice / $valueRange) * $graphHeight);
-            
-            // Use the same color as the current hour's line
+
+            // Use the same color as the current period's line
             for ($thick = 0; $thick < 2; $thick++) {
                 imageline($image, $x1, $prevY + $thick, $x1, $y + $thick, $lineColor);
             }
@@ -670,11 +675,10 @@ function drawPriceGraph($image, $hourPrices, $currentHour, $valueRange, $padding
 /**
  * Format text elements for display
  */
-function formatTextElements($currentHour, $currentPrice, $hoursUntilLowest, $minutesRemaining, $priceDiffLowest,
+function formatTextElements($currentPeriodStart, $currentPeriodEnd, $currentPrice, $hoursUntilLowest, $minutesRemaining, $priceDiffLowest,
                          $hoursUntilCheapest3h, $minutesUntilCheapest3h, $priceDiff3h, $colors) {
-    // Current hour and current price
-    $nextHour = ($currentHour + 1) % 24;
-    $currentTimeText = sprintf("%02d-%02d", $currentHour, $nextHour);
+    // Current 15-minute window and current price
+    $currentTimeText = $currentPeriodStart->format('H:i') . '-' . $currentPeriodEnd->format('H:i');
     
     // Round the current price to whole number (no decimals)
     $priceValue = $currentPrice ? round($currentPrice) : '--';
@@ -717,7 +721,8 @@ function drawTextElements($image, $text, $fonts, $width, $height, $textPadding,
                      $bottomBoxHeight, $padding, $labelX, $valueX, $diffX, $y1, $y2, $colors, $scaleFactor = 1) {
     // Scale font sizes based on width
     $titleFontSize = round(18 * $scaleFactor);
-    $mainFontSize = round(32 * $scaleFactor);
+    // Reduce the main time font size slightly to fit the longer label (e.g., 11:45-12:00)
+    $mainFontSize = round(26 * $scaleFactor);
     $unitFontSize = round(16 * $scaleFactor);
     $labelFontSize = round(18 * $scaleFactor);
     
@@ -738,8 +743,13 @@ function drawTextElements($image, $text, $fonts, $width, $height, $textPadding,
         
         // ===== MAIN TIME AND PRICE DISPLAY =====
         // Calculate sizes for precise positioning
-        $timeBox = imagettfbbox($mainFontSize, 0, $fonts['bold'], $text['currentTime']);
-        $timeWidth = $timeBox[2] - $timeBox[0];
+        $timeParts = explode('-', $text['currentTime']);
+        $timeTop = $timeParts[0] ?? '';
+        $timeBottom = $timeParts[1] ?? '';
+        $stackedTimeFontSize = max(12, round(16 * $scaleFactor)); // roughly half size
+        $timeTopBox = imagettfbbox($stackedTimeFontSize, 0, $fonts['bold'], $timeTop);
+        $timeBottomBox = imagettfbbox($stackedTimeFontSize, 0, $fonts['bold'], $timeBottom);
+        $timeWidth = max($timeTopBox[2] - $timeTopBox[0], $timeBottomBox[2] - $timeBottomBox[0]);
         
         $priceBox = imagettfbbox($mainFontSize, 0, $fonts['bold'], $text['priceValue']);
         $priceWidth = $priceBox[2] - $priceBox[0];
@@ -756,15 +766,17 @@ function drawTextElements($image, $text, $fonts, $width, $height, $textPadding,
         // Time positioned well to the right of ELPRIS
         $timeX = $elprisRight + 20; // Reduced from 30px to 20px from ELPRIS right edge
         
-        // Price positioned more to the center-right
-        $priceX = $width / 2 + 30; // Increased from 10 to 30 to add more space between time and price
+        // Price positioned more to the center-right (leave more room for stacked time)
+        $priceX = $width / 2 + 40;
         
         // Unit positioned further right from the price
         $unitX = $priceX + $priceWidth + 15; // Increased spacing from 5 to 15
         
-        // Draw time with glow effect (accent color)
-        imagettftext($image, $mainFontSize, 0, $timeX + 1, 45 + 1, $colors['shadowColor'], $fonts['bold'], $text['currentTime']);
-        imagettftext($image, $mainFontSize, 0, $timeX, 45, $colors['accentColor'], $fonts['bold'], $text['currentTime']);
+        // Draw stacked time (top: start, bottom: end)
+        imagettftext($image, $stackedTimeFontSize, 0, $timeX + 1, 30 + 1, $colors['shadowColor'], $fonts['bold'], $timeTop);
+        imagettftext($image, $stackedTimeFontSize, 0, $timeX, 30, $colors['accentColor'], $fonts['bold'], $timeTop);
+        imagettftext($image, $stackedTimeFontSize, 0, $timeX + 1, 48 + 1, $colors['shadowColor'], $fonts['bold'], $timeBottom);
+        imagettftext($image, $stackedTimeFontSize, 0, $timeX, 48, $colors['accentColor'], $fonts['bold'], $timeBottom);
         
         // Draw price with glow effect (white color)
         imagettftext($image, $mainFontSize, 0, $priceX + 1, 45 + 1, $colors['shadowColor'], $fonts['bold'], $text['priceValue']);
@@ -828,7 +840,7 @@ function drawTextElements($image, $text, $fonts, $width, $height, $textPadding,
         // Fallback implementation for non-TTF fonts
         // Scale font sizes based on width
         $titleFont = min(5, max(2, round(5 * $scaleFactor))); 
-        $mainFont = min(5, max(2, round(5 * $scaleFactor)));
+        $mainFont = min(5, max(2, round(4 * $scaleFactor))); // Slight reduction for longer time label
         $unitFont = min(4, max(1, round(3 * $scaleFactor)));
         $labelFont = min(5, max(2, round(4 * $scaleFactor)));
         
@@ -840,10 +852,16 @@ function drawTextElements($image, $text, $fonts, $width, $height, $textPadding,
         $elprisRight = $textPadding + $elprisWidth + round(20 * $scaleFactor);
         
         $timeX = $elprisRight + round(20 * $scaleFactor); // Reduced spacing
-        $priceX = $width / 2 + round(30 * $scaleFactor); // Increased spacing between time and price
+        $priceX = $width / 2 + round(20 * $scaleFactor); // Slightly closer since time text is longer
         $unitX = $priceX + (strlen($text['priceValue']) * imagefontwidth($mainFont)) + round(15 * $scaleFactor);
         
-        imagestring($image, $mainFont, $timeX, 20, $text['currentTime'], $colors['accentColor']);
+        // Draw stacked time using bitmap fonts
+        $timeParts = explode('-', $text['currentTime']);
+        $timeTop = $timeParts[0] ?? '';
+        $timeBottom = $timeParts[1] ?? '';
+        $stackedMainFont = max(1, $mainFont - 1); // smaller for stack
+        imagestring($image, $stackedMainFont, $timeX, 10, $timeTop, $colors['accentColor']);
+        imagestring($image, $stackedMainFont, $timeX, 28, $timeBottom, $colors['accentColor']);
         imagestring($image, $mainFont, $priceX, 20, $text['priceValue'], $colors['textColor']);
         imagestring($image, $unitFont, $unitX, 25, $text['priceUnit'], imagecolorallocate($image, 200, 200, 200));
         
