@@ -271,10 +271,11 @@ function processPriceData($priceData, $now, $currentHour) {
             'minute' => $minute
         ];
 
-        // Determine if this is the current period (within the current hour)
-        $isSameDay = $day === $today;
-        $isSameHour = $hour === $currentHour;
-        if ($isSameDay && $isSameHour) {
+        // Determine if this is the current 15-minute period
+        $periodStart = clone $startTime;
+        $periodEnd = clone $startTime;
+        $periodEnd->modify('+15 minutes');
+        if ($now >= $periodStart && $now < $periodEnd) {
             $currentPrice = $price['total_price'];
         }
 
