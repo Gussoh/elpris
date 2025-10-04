@@ -409,7 +409,7 @@ require_once 'config.php';
         </div>
 
         <canvas id="priceChart"></canvas>
-        <div id="chartTooltip">Välj en timme för att visa detaljer</div>
+        <div id="chartTooltip">Välj en period för att visa detaljer</div>
         
         <div class="time-range-selector">
             <button class="time-button active" data-days="1">Idag</button>
@@ -441,20 +441,28 @@ require_once 'config.php';
                 const currentHour = now.getHours();
                 const today = now.toISOString().split('T')[0];
                 
-                // Find cheapest 3h period
+                // Find cheapest 3h period (12 consecutive 15-min periods)
                 let cheapest3hStart = null;
                 let cheapest3hAvg = Infinity;
                 const prices = chart.data.fullData;
-                
-                for (let i = 0; i < prices.length - 2; i++) {
+
+                for (let i = 0; i <= prices.length - 12; i++) {
                     const startTime = new Date(prices[i].time_start);
                     if (startTime >= now || startTime.toISOString().split('T')[0] > today) {
-                        const avg = (prices[i].total_price + 
-                                   prices[i + 1].total_price + 
-                                   prices[i + 2].total_price) / 3;
-                        if (avg < cheapest3hAvg) {
-                            cheapest3hAvg = avg;
-                            cheapest3hStart = startTime;
+                        let sum = 0;
+                        let consecutive = true;
+                        for (let j = 0; j < 12; j++) {
+                            const expected = new Date(startTime.getTime() + j * 15 * 60 * 1000);
+                            const actual = new Date(prices[i + j].time_start);
+                            if (actual.getTime() !== expected.getTime()) { consecutive = false; break; }
+                            sum += prices[i + j].total_price;
+                        }
+                        if (consecutive) {
+                            const avg = sum / 12;
+                            if (avg < cheapest3hAvg) {
+                                cheapest3hAvg = avg;
+                                cheapest3hStart = startTime;
+                            }
                         }
                     }
                 }
@@ -465,16 +473,16 @@ require_once 'config.php';
                     if (!priceData) return;
                     
                     const priceDate = new Date(priceData.time_start);
-                    const priceHour = priceDate.getHours();
+                    const priceEnd = priceData.time_end ? new Date(priceData.time_end) : new Date(priceDate.getTime() + 15 * 60 * 1000);
                     const priceDay = priceDate.toISOString().split('T')[0];
                     let fillStyle = null;
                     
-                    // Highlight hovered hour (check first to take precedence)
-                    if (options.highlightedHour === priceData.time_start) {
+                    // Highlight hovered period (check first to take precedence)
+                    if (options.highlightedPeriod === priceData.time_start) {
                         fillStyle = 'rgba(255, 255, 255, 0.1)';
                     }
-                    // Highlight current hour
-                    else if (priceDay === today && priceHour === currentHour) {
+                    // Highlight current 15-minute period
+                    else if (priceDay === today && now >= priceDate && now < priceEnd) {
                         fillStyle = 'rgba(0, 255, 157, 0.1)';
                     }
                     // Highlight cheapest 3h period
@@ -493,21 +501,22 @@ require_once 'config.php';
                 });
                 
                 // Draw current time line
-                const currentHourIndex = chart.data.labels.findIndex((label, index) => {
+                const currentPeriodIndex = chart.data.labels.findIndex((label, index) => {
                     const priceData = chart.data.fullData[index];
                     if (!priceData) return false;
-                    
-                    const priceDate = new Date(priceData.time_start);
-                    return priceDate.toISOString().split('T')[0] === today && 
-                           priceDate.getHours() === currentHour;
+
+                    const start = new Date(priceData.time_start);
+                    const end = priceData.time_end ? new Date(priceData.time_end) : new Date(start.getTime() + 15 * 60 * 1000);
+                    return start.toISOString().split('T')[0] === today && now >= start && now < end;
                 });
 
                 // Draw current time line
-                if (currentHourIndex !== -1) {
-                    const minutes = now.getMinutes();
-                    const percentage = minutes / 60;
-                    const x1 = xScale.getPixelForValue(currentHourIndex);
-                    const x2 = xScale.getPixelForValue(currentHourIndex + 1);
+                if (currentPeriodIndex !== -1) {
+                    const start = new Date(chart.data.fullData[currentPeriodIndex].time_start);
+                    const end = chart.data.fullData[currentPeriodIndex].time_end ? new Date(chart.data.fullData[currentPeriodIndex].time_end) : new Date(start.getTime() + 15 * 60 * 1000);
+                    const percentage = Math.min(1, Math.max(0, (now - start) / (end - start)));
+                    const x1 = xScale.getPixelForValue(currentPeriodIndex);
+                    const x2 = xScale.getPixelForValue(currentPeriodIndex + 1);
                     const currentX = x1 + (x2 - x1) * percentage;
 
                     ctx.beginPath();
@@ -562,7 +571,6 @@ sudo chmod 755 ${error.cache_dir}</pre>
         // Function to update the UI with new price data
         function updateUI(data) {
             const now = new Date();
-            const currentHour = now.getHours();
             const today = now.toISOString().split('T')[0];
             
             // Find current price
@@ -575,20 +583,21 @@ sudo chmod 755 ${error.cache_dir}</pre>
             
             // Process prices
             data.prices.forEach(price => {
-                const priceDate = new Date(price.time_start);
-                const priceHour = priceDate.getHours();
-                const priceDay = priceDate.toISOString().split('T')[0];
+                const start = new Date(price.time_start);
+                const end = price.time_end ? new Date(price.time_end) : new Date(start.getTime() + 15 * 60 * 1000);
+                const priceDay = start.toISOString().split('T')[0];
                 const totalPrice = price.total_price;
-                
-                // Set current price for the current hour
-                if (priceDay === today && priceHour === currentHour) {
+
+                // Set current price for the current 15-minute period
+                if (priceDay === today && now >= start && now < end) {
                     currentPrice = totalPrice;
                 }
-                
-                if (priceDay >= today && (priceDay > today || priceHour >= currentHour)) {
+
+                // Track future lowest/highest prices from now onwards
+                if (start >= now) {
                     if (totalPrice < lowestPrice) {
                         lowestPrice = totalPrice;
-                        lowestPriceHour = priceDate;
+                        lowestPriceHour = start;
                     }
                     if (totalPrice > highestPrice) {
                         highestPrice = totalPrice;
@@ -596,16 +605,24 @@ sudo chmod 755 ${error.cache_dir}</pre>
                 }
             });
             
-            // Find cheapest 3h period
-            for (let i = 0; i < data.prices.length - 2; i++) {
+            // Find cheapest 3h period (12 consecutive 15-min periods)
+            for (let i = 0; i <= data.prices.length - 12; i++) {
                 const startTime = new Date(data.prices[i].time_start);
-                if (startTime >= new Date() || startTime.toISOString().split('T')[0] > today) {
-                    const avg = (data.prices[i].total_price + 
-                               data.prices[i + 1].total_price + 
-                               data.prices[i + 2].total_price) / 3;
-                    if (avg < cheapest3hAvg) {
-                        cheapest3hAvg = avg;
-                        cheapest3hStart = startTime;
+                if (startTime >= now || new Date(data.prices[i].time_start).toISOString().split('T')[0] > today) {
+                    let sum = 0;
+                    let consecutive = true;
+                    for (let j = 0; j < 12; j++) {
+                        const expected = new Date(startTime.getTime() + j * 15 * 60 * 1000);
+                        const actual = new Date(data.prices[i + j].time_start);
+                        if (actual.getTime() !== expected.getTime()) { consecutive = false; break; }
+                        sum += data.prices[i + j].total_price;
+                    }
+                    if (consecutive) {
+                        const avg = sum / 12;
+                        if (avg < cheapest3hAvg) {
+                            cheapest3hAvg = avg;
+                            cheapest3hStart = startTime;
+                        }
                     }
                 }
             }
@@ -713,7 +730,9 @@ sudo chmod 755 ${error.cache_dir}</pre>
         function updateChart(prices) {
             const labels = prices.map(price => {
                 const startDate = new Date(price.time_start);
-                return `${startDate.toLocaleString('sv-SE', { weekday: 'short' })} ${startDate.getHours().toString().padStart(2, '0')}:00`;
+                const hh = startDate.getHours().toString().padStart(2, '0');
+                const mm = startDate.getMinutes().toString().padStart(2, '0');
+                return `${startDate.toLocaleString('sv-SE', { weekday: 'short' })} ${hh}:${mm}`;
             });
             
             const values = prices.map(price => price.total_price);
@@ -782,7 +801,14 @@ sudo chmod 755 ${error.cache_dir}</pre>
                                 color: '#444'
                             },
                             ticks: {
-                                color: '#fff'
+                                color: '#fff',
+                                callback: (val, index, ticks) => {
+                                    // Show labels only on full hours to reduce clutter
+                                    const label = labels[index] || '';
+                                    return label.includes(':00') ? label : '';
+                                },
+                                maxRotation: 0,
+                                autoSkip: false
                             }
                         }
                     },
@@ -799,15 +825,15 @@ sudo chmod 755 ${error.cache_dir}</pre>
                             const isDecrease = price <= currentPrice;
                             
                             const hourTime = new Date(priceData.time_start);
-                            const endTime = new Date(hourTime.getTime() + 60 * 60 * 1000); // Add 1 hour
+                            const endTime = priceData.time_end ? new Date(priceData.time_end) : new Date(hourTime.getTime() + 15 * 60 * 1000);
                             const now = new Date();
                             const diffMs = hourTime - now;
                             
                             let tooltipContent = `
                                 <div class="tooltip-time">
                                     ${hourTime.toLocaleString('sv-SE', { weekday: 'short' })} ${
-                                        hourTime.getHours().toString().padStart(2, '0')}:00 - ${
-                                        endTime.getHours().toString().padStart(2, '0')}:00
+                                        hourTime.getHours().toString().padStart(2, '0')}:${hourTime.getMinutes().toString().padStart(2, '0')} - ${
+                                        endTime.getHours().toString().padStart(2, '0')}:${endTime.getMinutes().toString().padStart(2, '0')}
                                 </div>
                                 <div class="tooltip-price">
                                     Pris: ${price.toFixed(1)} öre/kWh
@@ -825,13 +851,13 @@ sudo chmod 755 ${error.cache_dir}</pre>
 
                             tooltipEl.innerHTML = tooltipContent;
                             
-                            // Set the highlighted hour
-                            chart.options.plugins.customCanvasBackgroundColor.highlightedHour = priceData.time_start;
+                            // Set the highlighted period
+                            chart.options.plugins.customCanvasBackgroundColor.highlightedPeriod = priceData.time_start;
                             chart.update('none');
                         } else {
-                            tooltipEl.innerHTML = 'Välj en timme för att visa detaljer';
-                            // Clear the highlighted hour
-                            chart.options.plugins.customCanvasBackgroundColor.highlightedHour = null;
+                            tooltipEl.innerHTML = 'Välj en period för att visa detaljer';
+                            // Clear the highlighted period
+                            chart.options.plugins.customCanvasBackgroundColor.highlightedPeriod = null;
                             chart.update('none');
                         }
                     }
