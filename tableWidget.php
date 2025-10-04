@@ -31,7 +31,7 @@ $scaleFactor = $width / 500;
 
 // Define padding and layout variables
 $padding = round(20 * $scaleFactor);
-$headerHeight = round(80 * $scaleFactor);
+$headerHeight = round(60 * $scaleFactor);  // Reduced from 80 to 60
 
 try {
     // Fetch today's price data and tomorrow's data
@@ -169,8 +169,20 @@ try {
                 'month' => $month,
                 'year' => $year
             ];
+            
+            // Add current hour to futureHours with hoursAway = 0 and isCurrent flag
+            $futureHours[] = [
+                'price' => $price['total_price'],
+                'time' => $startTime,
+                'hour' => $hour,
+                'day' => $day,
+                'month' => $month,
+                'year' => $year,
+                'hoursAway' => 0,
+                'isCurrent' => true
+            ];
         } 
-        // Collect future hours (only for today and tomorrow)
+        // Include future hours
         elseif ($timestamp > $now->getTimestamp() && $price['total_price'] > 0) {
             // Calculate hours away - using the exact hour difference, NOT forcing minimum 1
             $hoursAway = floor(($timestamp - $now->getTimestamp()) / 3600);
@@ -207,6 +219,11 @@ try {
     }
     
     // Select the next 12 hours (or fewer if not enough data)
+    // First, sort the futureHours array by hoursAway to ensure current hour is first
+    usort($futureHours, function($a, $b) {
+        return ($a['hoursAway'] ?? 0) - ($b['hoursAway'] ?? 0);
+    });
+    
     $next12Hours = array_slice($futureHours, 0, min(12, count($futureHours)));
     $next12HourKeys = array_map(function($item) {
         return $item['hour'] . '-' . $item['day'];
@@ -351,7 +368,7 @@ try {
     $colWidths = calculateColumnWidths($width, $padding, $scaleFactor);
     
     // Draw the 12 hour rows
-    drawHourRows($image, $next12Hours, $currentPrice, $tableStartY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, false, $averagePrice);
+    drawHourRows($image, $next12Hours, $currentPrice, $tableStartY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, false, $averagePrice, $width);
     
     // Now draw the cheapest hours section after we've calculated the layout variables
     if (!empty($cheapestHoursByTime)) {
@@ -360,7 +377,7 @@ try {
         
         // Draw the cheapest hours (in time order)
         drawHourRows($image, $cheapestHoursByTime, $currentPrice, $separatorY + $rowHeight, 
-                     $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, true, $averagePrice);
+                     $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, true, $averagePrice, $width);
     }
     
     // Clear any output buffered content before sending image
@@ -399,13 +416,11 @@ function loadRobotoFonts() {
 function calculateColumnWidths($width, $padding, $scaleFactor) {
     $totalWidth = $width - (2 * $padding);
     
-    // Reserve extra space for the percentage bars
-    $percentBarWidth = round(25 * $scaleFactor); // Bar width + spacing
-    
+    // Define column proportions
     return [
         'time' => round($totalWidth * 0.25),
         'price' => round($totalWidth * 0.20),
-        'diff' => round($totalWidth * 0.30), // More space for percentage + bar
+        'diff' => round($totalWidth * 0.30), // Space for percentage + bar
         'hours' => round($totalWidth * 0.25)
     ];
 }
@@ -419,67 +434,60 @@ function drawTableHeader($image, $width, $padding, $headerHeight, $colors, $font
     
     // Calculate font sizes
     $titleFontSize = round(22 * $scaleFactor);
-    $priceFontSize = round(32 * $scaleFactor);
-    $unitFontSize = round(16 * $scaleFactor);
     
     // Draw title text
     $title = "ELPRISTABELL";
+    
     if (is_string($fonts['bold']) && function_exists('imagettftext')) {
-        // Draw title
-        imagettftext($image, $titleFontSize, 0, $padding, 30 * $scaleFactor, 
+        // Calculate text dimensions to center it
+        $textBBox = imagettfbbox($titleFontSize, 0, $fonts['bold'], $title);
+        $textWidth = abs($textBBox[4] - $textBBox[0]);
+        
+        // Calculate centered position
+        $textX = ($width - $textWidth) / 2;
+        $textY = ($headerHeight + $titleFontSize/2) / 2;  // Vertical center
+        
+        // Draw centered title
+        imagettftext($image, $titleFontSize, 0, $textX, $textY, 
                      $colors['accentColor'], $fonts['bold'], $title);
-        
-        // Format current hour
-        $hour = $currentPrice['hour'];
-        $nextHour = ($hour + 1) % 24;
-        $timeText = sprintf("AKTUELLT PRIS (%02d-%02d)", $hour, $nextHour);
-        
-        // Draw current time
-        imagettftext($image, $titleFontSize, 0, $padding, 60 * $scaleFactor, 
-                     $colors['headerText'], $fonts['regular'], $timeText);
-        
-        // Draw current price
-        $priceText = round($currentPrice['price']);
-        imagettftext($image, $priceFontSize, 0, $width - $padding - 150 * $scaleFactor, 50 * $scaleFactor, 
-                     $colors['textColor'], $fonts['bold'], $priceText);
-        
-        // Draw unit
-        imagettftext($image, $unitFontSize, 0, $width - $padding - 60 * $scaleFactor, 50 * $scaleFactor, 
-                     $colors['lightText'], $fonts['regular'], "öre/kWh");
     } else {
-        // Fallback for built-in fonts
-        imagestring($image, 5, $padding, 10 * $scaleFactor, $title, $colors['accentColor']);
+        // Fallback for built-in fonts - use imagefontheight and imagefontwidth for centering
+        $fontHeight = imagefontheight(5);
+        $textWidth = imagefontwidth(5) * strlen($title);
         
-        $hour = $currentPrice['hour'];
-        $nextHour = ($hour + 1) % 24;
-        $timeText = sprintf("AKTUELLT PRIS (%02d-%02d)", $hour, $nextHour);
+        // Calculate centered position
+        $textX = ($width - $textWidth) / 2;
+        $textY = ($headerHeight - $fontHeight) / 2;
         
-        imagestring($image, 4, $padding, 30 * $scaleFactor, $timeText, $colors['headerText']);
-        
-        $priceText = round($currentPrice['price']);
-        imagestring($image, 5, $width - $padding - 100 * $scaleFactor, 20 * $scaleFactor, 
-                   $priceText . " öre/kWh", $colors['textColor']);
+        // Draw centered title
+        imagestring($image, 5, $textX, $textY, $title, $colors['accentColor']);
     }
     
-    // Draw header underline
-    imageline($image, $padding, $headerHeight - 1, $width - $padding, $headerHeight - 1, $colors['borderColor']);
+    // Draw header underline - full width
+    imageline($image, 0, $headerHeight - 1, $width, $headerHeight - 1, $colors['borderColor']);
 }
 
 /**
  * Draw a separator between sections
  */
 function drawSeparator($image, $width, $padding, $y, $colors, $fonts, $scaleFactor) {
-    // Draw separator line
-    imageline($image, $padding, $y, $width - $padding, $y, $colors['borderColor']);
+    // Calculate column positions to align the separator with the table
+    $colWidths = calculateColumnWidths($width, $padding, $scaleFactor);
+    $colX = calculateColumnX($colWidths, $width);
+    
+    // Draw separator line from the start of the table to the end
+    imageline($image, 0, $y, $width, $y, $colors['borderColor']);
     
     // Draw label for cheapest hours section
     $labelFontSize = round(16 * $scaleFactor);
     
     if (is_string($fonts['bold']) && function_exists('imagettftext')) {
-        imagettftext($image, $labelFontSize, 0, $padding + 10 * $scaleFactor, $y + 30 * $scaleFactor, 
+        // Position the label at the start of the table content plus a small margin
+        imagettftext($image, $labelFontSize, 0, $colX['time'], $y + 30 * $scaleFactor, 
                     $colors['accentColor'], $fonts['bold'], "BILLIGASTE TIMMARNA");
     } else {
-        imagestring($image, 4, $padding + 5 * $scaleFactor, $y + 10 * $scaleFactor, 
+        // Fallback for built-in fonts
+        imagestring($image, 4, $colX['time'], $y + 10 * $scaleFactor, 
                    "BILLIGASTE TIMMARNA", $colors['accentColor']);
     }
 }
@@ -487,9 +495,9 @@ function drawSeparator($image, $width, $padding, $y, $colors, $fonts, $scaleFact
 /**
  * Draw hour rows
  */
-function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, $isHighlighted = false, $averagePrice = null) {
+function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWidths, $colors, $fonts, $scaleFactor, $isHighlighted = false, $averagePrice = null, $width = null) {
     $rowCount = count($hours);
-    $colX = calculateColumnX($colWidths);
+    $colX = calculateColumnX($colWidths, $width);
     
     // Calculate font sizes
     $timeFontSize = round(18 * $scaleFactor);
@@ -497,17 +505,35 @@ function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWi
     $priceFontSize = round(20 * $scaleFactor);
     $diffFontSize = round(18 * $scaleFactor);
     
+    // Always show bars, only do minimum space check if it's truly narrow
+    $availableBarSpace = $colX['diff'] - $colX['price_end'];
+    $minimumRequiredSpace = round(10 * $scaleFactor);
+    $showBars = ($availableBarSpace >= $minimumRequiredSpace);
+    
     for ($i = 0; $i < $rowCount; $i++) {
         $hour = $hours[$i];
         $rowY = $startY + ($i * $rowHeight);
         
         // Determine row background color
         if ($isHighlighted) {
-            $bgColor = $colors['lowPriceColor'];
-            imagefilledrectangleWithAlpha($image, 0, $rowY, $colX['time'] - 5, $rowY + $rowHeight, $bgColor, 90);
-        } else {
+            // Draw the full-width row background first
             $bgColor = ($i % 2 == 0) ? $colors['rowBgEven'] : $colors['rowBgOdd'];
-            imagefilledrectangle($image, 0, $rowY, $colX['end'], $rowY + $rowHeight, $bgColor);
+            imagefilledrectangle($image, 0, $rowY, $width, $rowY + $rowHeight, $bgColor);
+            
+            // Then apply the highlighted section with alpha transparency - much narrower width
+            $highlightColor = $colors['lowPriceColor'];
+            // Calculate the highlight to be about half the distance from left edge to time column
+            $highlightWidth = max(round($colX['time'] * 0.5), round(5 * $scaleFactor));
+            imagefilledrectangleWithAlpha($image, 0, $rowY, $highlightWidth, $rowY + $rowHeight, $highlightColor, 90);
+        } else {
+            // Highlight current hour with a different background
+            if (isset($hour['isCurrent']) && $hour['isCurrent']) {
+                $bgColor = $colors['currentRowBg'];
+                imagefilledrectangle($image, 0, $rowY, $width, $rowY + $rowHeight, $bgColor);
+            } else {
+                $bgColor = ($i % 2 == 0) ? $colors['rowBgEven'] : $colors['rowBgOdd'];
+                imagefilledrectangle($image, 0, $rowY, $width, $rowY + $rowHeight, $bgColor);
+            }
         }
         
         // Format hour and time
@@ -545,11 +571,11 @@ function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWi
         
         // Special case for current hour in cheapest section
         if (isset($hour['isCurrent']) && $hour['isCurrent']) {
-            $diffText = "AKTUELL";
-            $hoursAwayText = "NU";
+            $diffText = ""; // Empty instead of "AKTUELL"
+            $hoursAwayText = "Nu";
         } else {
-            // Format hours away with a + sign
-            $hoursAwayText = "+" . $hour['hoursAway'] . "h";
+            // Format hours away with a + sign and add 1 to correctly show hours ahead
+            $hoursAwayText = "+" . ($hour['hoursAway'] + 1) . "h";
         }
         
         // Determine price text color based on comparison to average price
@@ -577,48 +603,56 @@ function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWi
             imagettftext($image, $priceFontSize, 0, $colX['price'], $rowY + $rowHeight / 2 + $priceFontSize/2, 
                         $priceColor, $fonts['bold'], $priceText);
             
-            // Special handling for "AKTUELL" text (no visual bar needed)
-            if ($diffText === "AKTUELL") {
-                // Just draw the text with accent color
-                imagettftext($image, $diffFontSize, 0, $colX['diff'], $rowY + $rowHeight / 2 + $diffFontSize/2, 
-                            $colors['accentColor'], $fonts['bold'], $diffText);
+            // Special handling for current hour - no diff text
+            if (isset($hour['isCurrent']) && $hour['isCurrent']) {
+                // Leave the diff column empty
             } else {
-                // Draw visual percentage bar to left of percentage text
-                $maxBarWidth = round(20 * $scaleFactor); // Maximum bar width
-                $barHeight = round(8 * $scaleFactor);  // Bar height
-                
-                // Calculate absolute percentage (without + or - sign)
-                $absPercentage = abs($priceDiff);
-                
-                // Limit to 100% for bar width calculation
-                $barPercentage = min(100, $absPercentage) / 100;
-                $barWidth = round($barPercentage * $maxBarWidth);
-                
-                // Don't draw bar if percentage is very small
-                if ($barWidth > 0) {
-                    // Position the bar vertically centered with text
+                // Only draw bars if we have enough space
+                if ($showBars) {
+                    // Calculate absolute percentage (without + or - sign)
+                    $absPercentage = abs($priceDiff);
+                    
+                    // Calculate bar dimensions - this is the new strategy
+                    $barHeight = round(10 * $scaleFactor); // Make the bar taller
+                    
+                    // Get width of percentage text
+                    $diffTextBbox = imagettfbbox($diffFontSize, 0, $fonts['bold'], $diffText);
+                    $diffTextWidth = abs($diffTextBbox[4] - $diffTextBbox[0]);
+                    
+                    // Total available space between price column end and diff text position
+                    $totalAvailableSpace = $colX['diff'] - $colX['price_end'] - 10 * $scaleFactor;
+                    
+                    // Scale to 200% max - percent of total available width
+                    $barPercentage = min(200, $absPercentage) / 200;
+                    $barWidth = round($barPercentage * $totalAvailableSpace);
+                    
+                    // Make sure bar has a minimum width
+                    $barWidth = max(round(10 * $scaleFactor), $barWidth);
+                    
+                    // Position the bar vertically centered
                     $barY = $rowY + $rowHeight / 2 - $barHeight / 2;
                     
-                    // Draw the bar to the left of the percentage text
-                    $barX = $colX['diff'] - $barWidth - round(5 * $scaleFactor);
+                    // Position the bar - starting from the diff position and extending leftward
+                    $barEndX = $colX['diff'] - round(5 * $scaleFactor); // 5px to left of text
+                    $barStartX = $barEndX - $barWidth;
                     
-                    // Use the same color as the percentage text
-                    imagefilledrectangle($image, $barX, $barY, $barX + $barWidth, $barY + $barHeight, $diffColor);
+                    // Draw the bar from right to left
+                    imagefilledrectangle($image, $barStartX, $barY, $barEndX, $barY + $barHeight, $diffColor);
                 }
                 
-                // Draw the percentage text
+                // Draw the percentage text after the bar
                 imagettftext($image, $diffFontSize, 0, $colX['diff'], $rowY + $rowHeight / 2 + $diffFontSize/2, 
                             $diffColor, $fonts['bold'], $diffText);
             }
                         
-            // Draw hours away
+            // Draw hours away (moved to the right)
             imagettftext($image, $diffFontSize, 0, $colX['hours'], $rowY + $rowHeight / 2 + $diffFontSize/2, 
                         $colors['lightText'], $fonts['regular'], $hoursAwayText);
         } else {
             // Fallback for built-in fonts
             imagestring($image, 4, $colX['time'], $rowY + ($rowHeight/2) - 7, $timeText, $colors['textColor']);
             
-            // Draw day indicator if needed
+            // Draw day indicator with smaller font if needed
             if (!empty($dayIndicator)) {
                 $timeWidth = imagefontwidth(4) * strlen($timeText);
                 imagestring($image, 2, $colX['time'] + $timeWidth + 5, 
@@ -628,61 +662,86 @@ function drawHourRows($image, $hours, $currentPrice, $startY, $rowHeight, $colWi
             // Draw price with calculated color
             imagestring($image, 5, $colX['price'], $rowY + ($rowHeight/2) - 7, $priceText, $priceColor);
             
-            // Special handling for "AKTUELL" text (no visual bar needed)
-            if ($diffText === "AKTUELL") {
-                // Just draw the text with accent color
-                imagestring($image, 4, $colX['diff'], $rowY + ($rowHeight/2) - 7, $diffText, $colors['accentColor']);
+            // Special handling for current hour - no diff text
+            if (isset($hour['isCurrent']) && $hour['isCurrent']) {
+                // Leave the diff column empty
             } else {
-                // Draw visual percentage bar to left of percentage text
-                $maxBarWidth = round(20 * $scaleFactor); // Maximum bar width
-                $barHeight = round(6 * $scaleFactor);  // Bar height slightly smaller for built-in fonts
-                
-                // Calculate absolute percentage (without + or - sign)
-                $absPercentage = abs($priceDiff);
-                
-                // Limit to 100% for bar width calculation
-                $barPercentage = min(100, $absPercentage) / 100;
-                $barWidth = round($barPercentage * $maxBarWidth);
-                
-                // Don't draw bar if percentage is very small
-                if ($barWidth > 0) {
-                    // Position the bar vertically centered with text
-                    $barY = $rowY + ($rowHeight/2) - $barHeight / 2 - 2; // Small adjustment for text alignment
+                // Only draw bars if we have enough space
+                if ($showBars) {
+                    // Calculate absolute percentage (without + or - sign)
+                    $absPercentage = abs($priceDiff);
                     
-                    // Draw the bar to the left of the percentage text
-                    $barX = $colX['diff'] - $barWidth - 5;
+                    // Calculate bar dimensions - new strategy
+                    $barHeight = round(8 * $scaleFactor); // Make the bar taller
                     
-                    // Use the same color as the percentage text
-                    imagefilledrectangle($image, $barX, $barY, $barX + $barWidth, $barY + $barHeight, $diffColor);
+                    // Get width of percentage text
+                    $diffTextWidth = imagefontwidth(4) * strlen($diffText);
+                    
+                    // Total available space between price column end and diff text position
+                    $totalAvailableSpace = $colX['diff'] - $colX['price_end'] - 10 * $scaleFactor;
+                    
+                    // Scale to 200% max - percent of total available width
+                    $barPercentage = min(200, $absPercentage) / 200;
+                    $barWidth = round($barPercentage * $totalAvailableSpace);
+                    
+                    // Make sure bar has a minimum width
+                    $barWidth = max(round(10 * $scaleFactor), $barWidth);
+                    
+                    // Position the bar vertically centered
+                    $barY = $rowY + ($rowHeight/2) - $barHeight / 2;
+                    
+                    // Position the bar - starting from the diff position and extending leftward
+                    $barEndX = $colX['diff'] - round(5 * $scaleFactor); // 5px to left of text
+                    $barStartX = $barEndX - $barWidth;
+                    
+                    // Draw the bar from right to left
+                    imagefilledrectangle($image, $barStartX, $barY, $barEndX, $barY + $barHeight, $diffColor);
                 }
                 
-                // Draw the percentage text
+                // Draw the percentage text after the bar
                 imagestring($image, 4, $colX['diff'], $rowY + ($rowHeight/2) - 7, $diffText, $diffColor);
             }
             
+            // Draw hours away (moved to the right)
             imagestring($image, 4, $colX['hours'], $rowY + ($rowHeight/2) - 7, $hoursAwayText, $colors['lightText']);
         }
         
         // Draw row separator
-        imageline($image, 0, $rowY + $rowHeight, $colX['end'], $rowY + $rowHeight, $colors['gridColor']);
+        imageline($image, 0, $rowY + $rowHeight, $width, $rowY + $rowHeight, $colors['gridColor']);
     }
 }
 
 /**
  * Calculate column X positions
  */
-function calculateColumnX($colWidths) {
-    $x1 = 20;  // Starting X position
+function calculateColumnX($colWidths, $width = null) {
+    // Calculate total table width
+    $totalTableWidth = $colWidths['time'] + $colWidths['price'] + $colWidths['diff'] + $colWidths['hours'];
+    
+    // Get available space in image width
+    $imageWidth = $width ?? 500; // Use passed width or default to 500px
+    
+    // Calculate left margin to center the table
+    $leftMargin = max(20, round(($imageWidth - $totalTableWidth) / 2));
+    
+    // Starting X position - now centered
+    $x1 = $leftMargin;
     $x2 = $x1 + $colWidths['time'];
     $x3 = $x2 + $colWidths['price'];
     $x4 = $x3 + $colWidths['diff'];
     $x5 = $x4 + $colWidths['hours'];
     
+    // Position the percentage text toward the right side of its column
+    $percentTextPos = $x3 + round($colWidths['diff'] * 0.75);
+    // Move hours further right (increased from 0.3 to 0.5 for more spacing)
+    $hoursTextPos = $x4 + round($colWidths['hours'] * 0.5);
+    
     return [
         'time' => $x1,
         'price' => $x2,
-        'diff' => $x3 + round($colWidths['diff'] * 0.4), // Offset right to make space for bar
-        'hours' => $x4,
+        'price_end' => $x3, // Add the end of price column for bar positioning
+        'diff' => $percentTextPos, // Move percentage text more to the right
+        'hours' => $hoursTextPos, // Move hours text more to the right
         'end' => $x5
     ];
 }
