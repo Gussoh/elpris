@@ -39,13 +39,13 @@ try {
     $priceData = [];
     
     // Get yesterday's price data
-    $yesterdayData = fetchPriceData(date('Y/m-d', strtotime('-1 day')), $area);
+    $yesterdayData = fetchPriceData(date('Y/m-d', strtotime('-1 day')), $area, true);
     if (is_array($yesterdayData) && !isset($yesterdayData['error'])) {
         $priceData = array_merge($priceData, $yesterdayData);
     }
     
     // Get today's price data
-    $todayData = fetchPriceData(date('Y/m-d'), $area);
+    $todayData = fetchPriceData(date('Y/m-d'), $area, true);
     if (is_array($todayData) && !isset($todayData['error'])) {
         $priceData = array_merge($priceData, $todayData);
     }
@@ -58,7 +58,7 @@ try {
     
     if ($current_time_in_minutes >= $release_time_in_minutes) {
         // Try to get tomorrow's price data
-        $tomorrowData = fetchPriceData(date('Y/m-d', strtotime('+1 day')), $area);
+        $tomorrowData = fetchPriceData(date('Y/m-d', strtotime('+1 day')), $area, true);
         if (is_array($tomorrowData) && !isset($tomorrowData['error'])) {
             $priceData = array_merge($priceData, $tomorrowData);
         }

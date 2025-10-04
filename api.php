@@ -11,13 +11,56 @@ const VALID_AREAS = ['SE1', 'SE2', 'SE3', 'SE4'];
 function calculateTotalPrice($base_price_sek) {
     // Add all components before VAT
     $price_before_vat = ($base_price_sek * 100) + ADDITIONAL_FEE + TRANSFER_CHARGE + ENERGY_TAX;
-    
+
     // Apply VAT to the total
     return $price_before_vat * VAT_MULTIPLIER;
 }
 
+// Function to aggregate 15-minute data to hourly averages
+function aggregateToHourly($priceData) {
+    $hourlyData = [];
+
+    foreach ($priceData as $price) {
+        $startTime = new DateTime($price['time_start']);
+        $hour = $startTime->format('Y-m-d H:00:00'); // Group by hour
+
+        if (!isset($hourlyData[$hour])) {
+            $hourlyData[$hour] = [
+                'time_start' => $hour,
+                'time_end' => date('Y-m-d H:i:s', strtotime($hour . ' +1 hour')),
+                'SEK_per_kWh' => 0,
+                'EUR_per_kWh' => 0,
+                'EXR' => $price['EXR'],
+                'total_price' => 0,
+                'count' => 0
+            ];
+        }
+
+        // Accumulate prices for averaging
+        $hourlyData[$hour]['SEK_per_kWh'] += $price['SEK_per_kWh'];
+        $hourlyData[$hour]['EUR_per_kWh'] += $price['EUR_per_kWh'];
+        $hourlyData[$hour]['total_price'] += calculateTotalPrice($price['SEK_per_kWh']);
+        $hourlyData[$hour]['count']++;
+    }
+
+    // Calculate averages
+    $result = [];
+    foreach ($hourlyData as $hour => $data) {
+        $result[] = [
+            'time_start' => $data['time_start'],
+            'time_end' => $data['time_end'],
+            'SEK_per_kWh' => round($data['SEK_per_kWh'] / $data['count'], 4),
+            'EUR_per_kWh' => round($data['EUR_per_kWh'] / $data['count'], 4),
+            'EXR' => $data['EXR'],
+            'total_price' => round($data['total_price'] / $data['count'], 2)
+        ];
+    }
+
+    return $result;
+}
+
 // Function to safely fetch JSON data
-function fetchPriceData($date, $area) {
+function fetchPriceData($date, $area, $aggregate_to_hourly = false) {
     static $cache_error_shown = false;
     
     // Convert date format from Y/m-d to Y-m-d for proper parsing
@@ -61,6 +104,10 @@ function fetchPriceData($date, $area) {
             foreach ($data as &$price) {
                 $price['total_price'] = calculateTotalPrice($price['SEK_per_kWh']);
             }
+            // Aggregate to hourly if requested
+            if ($aggregate_to_hourly) {
+                $data = aggregateToHourly($data);
+            }
             return $data;
         }
     }
@@ -100,8 +147,12 @@ function fetchPriceData($date, $area) {
         foreach ($data as &$price) {
             $price['total_price'] = calculateTotalPrice($price['SEK_per_kWh']);
         }
+        // Aggregate to hourly if requested
+        if ($aggregate_to_hourly) {
+            $data = aggregateToHourly($data);
+        }
     }
-    
+
     return $data;
 }
 
